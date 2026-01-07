@@ -1,11 +1,16 @@
-import { Pool } from "pg"; // ou outro client que você use
+import pkg from "pg";
+import dotenv from "dotenv";
 
-const pool = new Pool({
-  user: "seu_usuario",
-  host: "localhost",
-  database: "beautybody",
-  password: "sua_senha",
-  port: 5432
+dotenv.config(); // carrega o .env
+
+const { Pool } = pkg;
+
+export const pool = new Pool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT),
+  database: process.env.DB_NAME,
+  user: process.env.DB_USER,
+  password: String(process.env.DB_PASSWORD),
 });
 
-export default pool;
+export const query = (text, params) => pool.query(text, params);
