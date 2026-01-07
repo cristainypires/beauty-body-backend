@@ -3,3 +3,7 @@ variaveis.env
 .env
 dist/
 build/
+.gitignore
+package-lock.json
+package-json-backup.json
+Server/
