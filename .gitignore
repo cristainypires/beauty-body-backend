@@ -1,16 +1,5 @@
-# dependências
 node_modules/
-
-# ambiente
+variaveis.env
 .env
-
-# build
 dist/
 build/
-
-# logs
-npm-debug.log*
-yarn-error.log*
-
-# sistema
-.DS_Store
