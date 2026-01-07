@@ -4,6 +4,5 @@ variaveis.env
 dist/
 build/
 .gitignore
-package-lock.json
-package-json-backup.json
+
 src/Server.js
