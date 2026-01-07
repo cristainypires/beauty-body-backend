@@ -6,4 +6,4 @@ build/
 .gitignore
 package-lock.json
 package-json-backup.json
-Server/
+src/Server.js
