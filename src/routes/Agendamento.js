@@ -1,6 +1,6 @@
 import { Router } from "express";
-import { autenticar } from "../middleware/AuthMiddleware.js";
-import { autorizar } from "../middleware/RoleMiddleware.js";
+import { autenticar } from "../middlewares/AuthMiddleware.js";
+import { autorizar } from "../middlewares/RoleMiddleware.js";
 
 const router = Router();
 
