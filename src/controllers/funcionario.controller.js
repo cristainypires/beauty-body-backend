@@ -165,6 +165,64 @@ const funcionario_Controller = {
     } catch (erro) {
       return res.status(500).json({ erro: "Erro ao buscar seu histórico." });
     }
+  },
+
+
+  ////////////////////////////////////////////
+  // 6. MARCAR FÉRIAS ////////////////////////
+  ////////////////////////////////////////////
+  async marcar_feria(req, res) {
+    try {
+      const { usuario_id } = req.user;
+      const { data_inicio, data_fim, motivo } = req.body;
+
+      if (!data_inicio || !data_fim) {
+        return res.status(400).json({ erro: "Informe a data de início e fim das férias." });
+      }
+
+      const inicio = new Date(data_inicio);
+      const fim = new Date(data_fim);
+
+      if (inicio > fim) {
+        return res.status(400).json({ erro: "A data inicial não pode ser maior que a final." });
+      }
+
+      let dataAtual = new Date(inicio);
+
+      while (dataAtual <= fim) {
+        await Agendamento.create({
+          funcionario_id: usuario_id,
+          cliente_id: null,
+          servico_id: null,
+          data_hora_inicio: new Date(
+            dataAtual.toISOString().split("T")[0] + "T00:00:00"
+          ),
+          data_hora_fim: new Date(
+            dataAtual.toISOString().split("T")[0] + "T23:59:59"
+          ),
+          status: "bloqueado",
+          observacoes_funcionario: motivo || "Férias"
+        });
+
+        dataAtual.setDate(dataAtual.getDate() + 1);
+      }
+
+      return res.json({ mensagem: "Férias marcadas com sucesso." });
+
+    } catch (error) {
+      return res.status(500).json({ erro: "Erro ao marcar férias." });
+    }
   }
+
+
+
+
+
+
+
 };
+
+
+
+
 export default funcionario_Controller;

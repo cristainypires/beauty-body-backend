@@ -5,7 +5,10 @@ import auth from "../middlewares/auth.js";
 
 const router = express.Router();
 
-router.use(auth);//servicos
+router.use(auth);
+
+
+//servicos
 router.get("/servicos", admin_Controller.listar_servicos);            
 router.post("/servicos", admin_Controller.criar_servico);             
 router.put("/servicos/:servico_id", admin_Controller.atualizar_servico); 
@@ -23,8 +26,8 @@ router.delete("/clientes/:cliente_id", admin_Controller.desativar_cliente);
 
 //agendamentos
 router.get("/agendamentos", admin_Controller.listar_agendamentos);         
-router.patch("/agendamentos/:agendamento_id/cancelar", admin_Controller.cancelar_agendamento); 
-router.patch("/agendamentos/:agendamento_id/reagendar", admin_Controller.reagendar_agendamento); 
+router.patch("/agendamentos/:agendamento_id/cancelar", admin_Controller.cancelar_agendamento); //so agendamentos comfirmados
+router.patch("/agendamentos/:agendamento_id/reagendar", admin_Controller.reagendar_agendamento); //so agendamentos confirmados
 
 
 
