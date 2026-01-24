@@ -4,6 +4,7 @@ const StatusAgendamento = {
     CANCELADO: 'cancelado',
     REMARCADO: 'remarcado',
     FINALIZADO: 'finalizado',
-    EXPIRADO: 'expirado'
+    EXPIRADO: 'expirado',
+    CONCLUIDO: 'concluido'
 };
 module.exports = StatusAgendamento;

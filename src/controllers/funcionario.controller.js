@@ -1,170 +1,290 @@
-import{ Op } from "sequelize";
-import db from "../database/index.js";
-const { Agendamento, Cliente, Servico, AgendaFuncionario } = db;
+import { Op } from "sequelize";
+import {
+  Agendamento,
+  Funcionario,
+  Usuario,
+  Cliente,
+  Servico,
+  StatusAgendamento,
+  AgendaFuncionario,
+  Pagamento,
+} from "../models/index.js";
+import { normalizarAgenda } from "../utils/agendamento.utils.js";
+
 const funcionario_Controller = {
+  // Auxiliar para pegar o ID da tabela Funcionario
+  async _getFuncionarioId(usuario_id) {
+    const f = await Funcionario.findOne({ where: { usuario_id } });
+    return f ? f.id : null;
+  },
 
+  // 1. Agenda Atual e Futura (Usada na Home e Agenda)
+  // Localização: controllers/funcionario.controller.js
 
-
-  ////////////////////////////////////////////
-  // 1. VER MINHA AGENDA DO DIA /////////////
-  ////////////////////////////////////////////
   async ver_minha_agenda(req, res) {
-    try {
-      const { usuario_id } = req.user; 
-      const { data } = req.query; 
+  try {
+    const { id: usuario_id } = req.user;
+    const { data } = req.query;
 
-      if (!data) {
-        return res.status(400).json({ erro: "Por favor, informe a data." });
+    const funcionarioLogado = await Funcionario.findOne({
+      where: { usuario_id },
+    });
+
+    // 🔒 Se não for funcionário, pode ser admin (ver tudo)
+    let whereClause = {};
+
+    // 📅 Lógica de datas
+    const agora = new Date();
+    if (data && data.trim() !== "") {
+      whereClause.data_hora_inicio = {
+        [Op.gte]: `${data} 00:00:00`,
+        [Op.lte]: `${data} 23:59:59`,
+      };
+    } else {
+      const trintaDiasAtras = new Date();
+      trintaDiasAtras.setDate(agora.getDate() - 30);
+      whereClause.data_hora_inicio = {
+        [Op.gte]: `${trintaDiasAtras.toISOString().split("T")[0]} 00:00:00`,
+      };
+    }
+
+    // 🎯 REGRA DE NEGÓCIO
+    if (funcionarioLogado) {
+      if (funcionarioLogado.tipo === "profissional") {
+        // 👇 PROFISSIONAL: só vê a própria agenda
+        whereClause.funcionario_id = funcionarioLogado.id;
+        console.log("📌 Profissional: vendo apenas minha agenda");
+      } else {
+        // 👀 Recepcionista: vê tudo
+        console.log("📌 Recepcionista: vendo agenda geral");
       }
+    }
 
-      const agenda = await Agendamento.findAll({
-        where: {
-          funcionario_id: usuario_id,
-          data_hora_inicio: {
-            [Op.between]: [
-              new Date(`${data}T00:00:00`), 
-              new Date(`${data}T23:59:59`)
-            ]
-          },
-          status: { [Op.ne]: 'cancelado' } // Não mostra cancelados na agenda ativa
+    const agenda = await Agendamento.findAll({
+      where: whereClause,
+      include: [
+        {
+          model: Cliente,
+          include: [{ model: Usuario, attributes: ["nome", "numero_telefone"] }],
         },
-        include: [
-          { 
-            model: Cliente, 
-            attributes: ['nome', 'numero_telefone'] // Detalhes do cliente para contato
-          },
-          { 
-            model: Servico, 
-            attributes: ['nome_servico', 'duracao_minutos'] 
-          }
-        ],
-        order: [['data_hora_inicio', 'ASC']]
-      });
+        { model: Servico, attributes: ["nome_servico", "duracao_minutos", "preco"] },
+        { model: StatusAgendamento, attributes: ["nome"] },
+        {
+          model: Funcionario,
+          attributes: ["id"],
+          include: [{ model: Usuario, attributes: ["nome"] }],
+        },
+      ],
+      order: [["data_hora_inicio", "ASC"]],
+    });
 
-      return res.json(agenda);
-    } catch (erro) {
-      return res.status(500).json({ erro: "Erro ao buscar sua agenda." });
-    }
-  },
+    const resultado = agenda.map((item) => {
+      const dataJson = item.toJSON();
+      return {
+        ...dataJson,
+        cliente_nome: dataJson.Cliente?.Usuario?.nome || "Cliente avulso",
+        cliente_telefone: dataJson.Cliente?.Usuario?.numero_telefone || "",
+        profissional_nome: dataJson.Funcionario?.Usuario?.nome || "Sem profissional",
+      };
+    });
+
+    return res.json(normalizarAgenda(resultado));
+  } catch (erro) {
+    console.error("❌ ERRO:", erro);
+    return res.status(500).json({ error: erro.message });
+  }
+},
 
 
-
-
-  ////////////////////////////////////////////////////////
-  // 2. CONCLUIR SERVIÇO  ////////////
-  ////////////////////////////////////////////////////////
-  async concluir_servico(req, res) {
+  // 2. Histórico Pessoal
+  async ver_historico_pessoal(req, res) {
     try {
-      const { agendamento_id } = req.params;
-      const { usuario_id } = req.user;
+      const { id: usuario_id } = req.user;
+      const funcionario_id =
+        await funcionario_Controller._getFuncionarioId(usuario_id);
+      const agora = new Date();
 
-      const agendamento = await Agendamento.findByPk(agendamento_id);
-
-      // Validação: Só o próprio funcionário pode concluir seu serviço
-      if (!agendamento || agendamento.funcionario_id !== usuario_id) {
-        return res.status(403).json({ erro: "Acesso negado ou registro não encontrado." });
-      }
-
-      if (agendamento.status !== 'confirmado' && agendamento.status !== 'pendente') {
-        return res.status(400).json({ erro: "Apenas serviços agendados podem ser concluídos." });
-      }
-
-      await agendamento.update({
-        status: 'concluido',
-        atualizado_em: new Date()
+      const historico = await Agendamento.findAll({
+        where: { funcionario_id, data_hora_inicio: { [Op.lt]: agora } },
+        include: [
+          {
+            model: Cliente,
+            include: [
+              { model: Usuario, attributes: ["nome", "numero_telefone"] },
+            ],
+          },
+          { model: Servico, attributes: ["nome_servico", "preco"] },
+          { model: StatusAgendamento, attributes: ["nome"] },
+        ],
+        order: [["data_hora_inicio", "DESC"]],
       });
 
-      return res.json({ mensagem: "Serviço finalizado com sucesso!" });
+      return res.json(normalizarAgenda(historico.map((i) => i.toJSON())));
     } catch (erro) {
-      return res.status(500).json({ erro: "Erro ao concluir o serviço." });
+      return res.status(500).json([]);
     }
   },
 
+ 
 
+  // 4. Perfil Resumo (Necessário para a Sidebar/Header do Dash)
+  async perfil_resumo(req, res) {
+    try {
+      const { id: usuario_id } = req.user;
+      const dadosFunc = await Funcionario.findOne({
+        where: { usuario_id },
+        include: [
+          {
+            model: Usuario,
+            attributes: ["nome", "apelido", "email", "numero_telefone"],
+          },
+        ],
+      });
 
-  ////////////////////////////////////////////
-  // 3. DEFINIR DISPONIBILIDADE SEMANAL ////////
-  ////////////////////////////////////////////
+      if (!dadosFunc)
+        return res.status(404).json({ erro: "Perfil não encontrado" });
+
+      const totalServicos = await Agendamento.count({
+        where: { funcionario_id: dadosFunc.id },
+      });
+
+      return res.json({
+        id: dadosFunc.id,
+        nome: dadosFunc.Usuario?.nome || "Funcionário",
+        servico_associado: dadosFunc.funcao_especialidade || "Geral",
+        avaliacao: 4.9,
+        estatisticas: { total_agendamentos: totalServicos },
+      });
+    } catch (erro) {
+      return res.status(500).send();
+    }
+  },
+
+  // 5. Disponibilidade Semanal
   async marcar_disponibilidade(req, res) {
     try {
-      const { usuario_id } = req.user;
+      const { id: usuario_id } = req.user;
       const { dia_semana, hora_inicio, hora_fim, disponivel } = req.body;
+      const funcionario_id =
+        await funcionario_Controller._getFuncionarioId(usuario_id);
 
-      // dia_semana: 0 (Dom) a 6 (Sab)
-      if (dia_semana < 0 || dia_semana > 6) {
-        return res.status(400).json({ erro: "Dia da semana inválido." });
-      }
-
-      // Procura se já existe configuração para este dia, se sim atualiza, se não cria
       const [agenda, created] = await AgendaFuncionario.findOrCreate({
-        where: { funcionario_id: usuario_id, dia_semana },
-        defaults: { hora_inicio, hora_fim, disponivel }
+        where: { funcionario_id, dia_semana },
+        defaults: { hora_inicio, hora_fim, disponivel },
       });
 
-      if (!created) {
-        await agenda.update({ hora_inicio, hora_fim, disponivel });
-      }
+      if (!created) await agenda.update({ hora_inicio, hora_fim, disponivel });
 
-      return res.json({ mensagem: "Sua disponibilidade semanal foi atualizada." });
+      return res.json({ mensagem: "Disponibilidade atualizada." });
     } catch (erro) {
-      return res.status(500).json({ erro: "Erro ao salvar disponibilidade." });
+      return res.status(500).send();
     }
   },
 
-
-
-
-  ////////////////////////////////////////////
-  // 4. BLOQUEAR HORÁRIO //////////////////
-  ////////////////////////////////////////////
+  // 6. Bloquear Horário
   async bloquear_horario(req, res) {
     try {
-      const { usuario_id } = req.user;
-      const { data, hora_inicio, hora_fim, motivo } = req.body;
+      const { id: usuario_id } = req.user;
+      const { data, hora_inicio, hora_fim } = req.body;
+      const funcionario_id =
+        await funcionario_Controller._getFuncionarioId(usuario_id);
+      const statusCancelado = await StatusAgendamento.findOne({
+        where: { nome: "cancelado" },
+      });
 
-      // Cria um agendamento com status 'bloqueado' para impedir que clientes marquem
       await Agendamento.create({
-        funcionario_id: usuario_id,
-        cliente_id: null, // Sem cliente vinculado
+        funcionario_id,
+        cliente_id: null,
         servico_id: null,
+        status_id: statusCancelado.id,
         data_hora_inicio: new Date(`${data}T${hora_inicio}`),
         data_hora_fim: new Date(`${data}T${hora_fim}`),
-        status: 'bloqueado',
-        observacoes_funcionario: motivo || "Bloqueio de agenda manual"
       });
 
       return res.json({ mensagem: "Horário bloqueado com sucesso." });
     } catch (erro) {
-      return res.status(500).json({ erro: "Erro ao realizar bloqueio." });
+      return res.status(500).send();
+    }
+  },
+
+  // 7. Marcar Férias
+  async marcar_ferias(req, res) {
+    try {
+      const { id: usuario_id } = req.user;
+      const funcionario_id =
+        await funcionario_Controller._getFuncionarioId(usuario_id);
+      await Funcionario.update(
+        { ativo: false },
+        { where: { id: funcionario_id } },
+      );
+      return res.json({ mensagem: "Férias registradas!" });
+    } catch (erro) {
+      return res.status(500).send();
+    }
+  },
+
+  // 8. Relatório Financeiro
+  async relatorio_financeiro(req, res) {
+    try {
+      const { id: usuario_id } = req.user;
+      const funcionario_id =
+        await funcionario_Controller._getFuncionarioId(usuario_id);
+
+      const agendamentos = await Agendamento.findAll({
+        where: { funcionario_id },
+        include: [{ model: Servico, attributes: ["preco"] }],
+      });
+
+      const total = agendamentos.reduce(
+        (acc, ag) => acc + Number(ag.Servico?.preco || 0),
+        0,
+      );
+      return res.json({ total, agendamentos });
+    } catch (erro) {
+      return res.status(500).send();
     }
   },
 
 
 
 
-  ////////////////////////////////////////////
-  // 5. VER MEU HISTÓRICO DE SERVIÇOS
-  ////////////////////////////////////////////
-  async ver_historico_pessoal(req, res) {
+ async concluir_servico(req, res) {
     try {
-      const { usuario_id } = req.user;
-
-      const historico = await Agendamento.findAll({
-        where: { funcionario_id: usuario_id, status: 'concluido' },
-        include: [
-            { model: Servico, attributes: ['nome_servico'] },
-            { model: Cliente, attributes: ['nome'] }
-        ],
-        order: [['data_hora_inicio', 'DESC']]
+      const { agendamento_id } = req.params;
+      const status = await StatusAgendamento.findOne({
+        where: { nome: "concluido" },
       });
+      if (!status)
+        return res
+          .status(400)
+          .json({ erro: "Status concluído não configurado." });
 
-      return res.json({ 
-        total_servicos_realizados: historico.length,
-        historico 
-      });
-    } catch (erro) {
-      return res.status(500).json({ erro: "Erro ao buscar seu histórico." });
+      await Agendamento.update(
+        { status_id: status.id },
+        { where: { id: agendamento_id } },
+      );
+      return res.json({ mensagem: "Serviço concluído com sucesso!" });
+    } catch (e) {
+      return res.status(500).json({ erro: "Erro ao concluir." });
     }
-  }
+  },
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 };
+
 export default funcionario_Controller;
