@@ -1,18 +1,15 @@
-const express = require("express");
+import express from "express";
+import agendamento_Controller from "../controllers/agendamento.controller.js";
+import auth from "../middlewares/auth.js";
+
 const router = express.Router();
-const agendamento_Controller = require("../controllers/agendamento.controller");
-const auth = require("../middleware/auth");
 
 router.use(auth);
 
-// Núcleo do agendamento
 router.post("/", agendamento_Controller.fazer_agendamento);
+router.get("/meus", agendamento_Controller.listar_agendamentos);
 router.patch("/:id/confirmar", agendamento_Controller.confirmar);
 router.patch("/:id/cancelar", agendamento_Controller.cancelar);
 router.patch("/:id/reagendar", agendamento_Controller.reagendar);
-router.get("/meus", agendamento_Controller.listar_agendamentos);
 
-
-
-
-module.exports = router;
+export default router;

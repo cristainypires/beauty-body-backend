@@ -1,35 +1,31 @@
 import express from "express";
-const router = express.Router();
-import auth from "../middlewares/auth.js";
 import sistema_Controller from "../controllers/sistema.controller.js";
+import auth from "../middlewares/auth.js";
+import RoleMiddleware from "../middlewares/RoleMiddleware.js";
 
-router.use(auth);
+const router = express.Router();
 
-// Rotas manuais para testar/acionar as rotinas
+// Apenas Admin pode disparar rotinas manuais
+router.use(auth, RoleMiddleware(["admin"]));
+
 router.post("/limpar-pendentes", async (req, res) => {
   await sistema_Controller.rotina_limpar_pendentes();
-  res.json({ mensagem: "Rotina de limpeza executada." });
+  res.json({ mensagem: "Limpeza de pendentes concluída." });
 });
 
 router.post("/concluir-servicos", async (req, res) => {
   await sistema_Controller.rotina_mudar_status_concluido();
-  res.json({ mensagem: "Rotina de conclusão executada." });
+  res.json({ mensagem: "Status de serviços antigos atualizados." });
 });
 
 router.post("/lembretes-24h", async (req, res) => {
   await sistema_Controller.lembrete_24h();
-  res.json({ mensagem: "Lembretes enviados." });
+  res.json({ mensagem: "Lembretes processados." });
 });
 
 router.post("/aniversariantes", async (req, res) => {
   await sistema_Controller.parabens_aniversariantes();
-  res.json({ mensagem: "Notificações de aniversariantes enviadas." });
-});
-
-router.post("/promocoes", async (req, res) => {
-  const { titulo, mensagem } = req.body;
-  await sistema_Controller.enviar_promocao_geral(titulo, mensagem);
-  res.json({ mensagem: "Promoções enviadas." });
+  res.json({ mensagem: "Aniversariantes notificados." });
 });
 
 export default router;

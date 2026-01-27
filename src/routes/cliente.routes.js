@@ -1,22 +1,24 @@
-const express = require("express");
-const router = express.Router();
+import express from "express";
+import cliente_Controller from "../controllers/cliente.controller.js";
+import agendamento_Controller from "../controllers/agendamento.controller.js";
+import auth from "../middlewares/auth.js";
 
-const cliente_Controller = require("../controllers/cliente.controller");
-const agendamento_Controller = require("../controllers/agendamento.controller");
-const auth = require("../middleware/auth");
+const router = express.Router();
 
 // Todas as rotas do cliente exigem login
 router.use(auth);
 
-// Visibilidade
+// Visibilidade e Busca
 router.get("/servicos", cliente_Controller.listar_servicos_disponiveis);
-router.get("/servicos/:servico_id/profissionais", cliente_Controller.listar_profissionais_por_servico);
 router.get("/horarios-livres", cliente_Controller.consultar_horarios_livres);
 
-// Agendamentos
+// Meus Agendamentos (Cliente vê os dele)
+router.get("/meus-agendamentos", cliente_Controller.listar_agendamentos);
+router.post("/feedback/:agendamento_id", cliente_Controller.feedback_servico);
+
+// Lógica de Agendamento (Centralizada)
 router.post("/agendamentos", agendamento_Controller.fazer_agendamento);
-router.get("/listar-agendamentos", agendamento_Controller.listar_agendamentos);
 router.patch("/agendamentos/:id/cancelar", agendamento_Controller.cancelar);
 router.patch("/agendamentos/:id/reagendar", agendamento_Controller.reagendar);
 
-module.exports = router;
+export default router;

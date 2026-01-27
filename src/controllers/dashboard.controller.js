@@ -1,130 +1,152 @@
-import { Agendamento, Usuario, Cliente, Servico, Notificacao, Pagamento, Funcionario } from "../database/index.js";
-import { Op, fn, col } from "sequelize";
+import { query } from "../database/index.js";
 
 // ==========================================
-// 1. DASHBOARD DO FUNCIONÁRIO (RF11)
+// 1. DASHBOARD DO FUNCIONÁRIO
 // ==========================================
-
 export async function dashboard_funcionario(req, res) {
   try {
-    const funcionario_id = req.user.id;
-    const { page = 1, limit = 10, status, inicio, fim } = req.query;
-
-    // Construindo filtros
-    const filtroHistorico = {
-      funcionario_id,
-      status: status || "concluido"
-    };
-
-    if (inicio && fim) {
-      filtroHistorico.data_hora_fim = {
-        [Op.between]: [new Date(inicio), new Date(fim)]
-      };
-    }
-
-    // Estatísticas resumidas
-    const resumo_status = await Agendamento.findAll({
-      where: { funcionario_id },
-      attributes: ['status', [fn('COUNT', col('id')), 'quantidade']],
-      group: ['status']
-    });
-
-    // Próximos agendamentos
-    const proximos_agendamentos = await Agendamento.findAll({
-      where: {
-        funcionario_id,
-        status: { [Op.in]: ["confirmado", "pendente"] },
-        data_hora_inicio: { [Op.gte]: new Date() }
-      },
-      include: [
-        { model: Cliente, include: [{ model: Usuario, attributes: ['nome', 'apelido'] }] },
-        { model: Servico, attributes: ['nome_servico', 'duracao_minutos'] }
-      ],
-      order: [["data_hora_inicio", "ASC"]],
-      limit: 10
-    });
-
-    // Histórico com paginação
+    const usuario_id = req.user.id; 
+    const { page = 1, limit = 10 } = req.query;
     const offset = (page - 1) * limit;
-    const { count, rows: historico } = await Agendamento.findAndCountAll({
-      where: filtroHistorico,
-      include: [
-        { model: Cliente, include: [{ model: Usuario, attributes: ['nome'] }] },
-        { model: Servico, attributes: ['nome_servico', 'preco'] }
-      ],
-      order: [["data_hora_fim", "DESC"]],
-      limit: parseInt(limit),
-      offset
-    });
 
-    const totalPages = Math.ceil(count / limit);
+    // 1. Primeiro, pegamos o ID real do funcionário na tabela 'funcionario'
+    const funcRes = await query("SELECT id FROM funcionario WHERE usuario_id = $1", [usuario_id]);
+    if (funcRes.rows.length === 0) return res.status(404).json({ erro: "Funcionário não encontrado." });
+    const funcionario_id = funcRes.rows[0].id;
+
+    // 2. Próximos agendamentos (Pendentes ou Confirmados)
+    const proximos = await query(
+      `SELECT 
+        a.id, u_cli.nome AS cliente_nome, u_cli.numero_telefone AS cliente_telefone,
+        s.nome_servico, s.preco, a.data_hora_inicio, sa.nome AS status
+      FROM agendamento a
+      JOIN cliente c ON a.cliente_id = c.id
+      JOIN usuario u_cli ON c.usuario_id = u_cli.id
+      JOIN servico s ON a.servico_id = s.id
+      JOIN status_agendamento sa ON a.status_id = sa.id
+      WHERE a.funcionario_id = $1 
+        AND a.data_hora_inicio >= NOW()
+        AND sa.nome IN ('confirmado', 'pendente')
+      ORDER BY a.data_hora_inicio ASC LIMIT 5`,
+      [funcionario_id]
+    );
+
+    // 3. Histórico completo (Paginação)
+    const historico = await query(
+      `SELECT 
+        a.id, u_cli.nome AS cliente_nome, s.nome_servico, s.preco,
+        a.data_hora_inicio, sa.nome AS status
+      FROM agendamento a
+      JOIN cliente c ON a.cliente_id = c.id
+      JOIN usuario u_cli ON c.usuario_id = u_cli.id
+      JOIN servico s ON a.servico_id = s.id
+      JOIN status_agendamento sa ON a.status_id = sa.id
+      WHERE a.funcionario_id = $1
+      ORDER BY a.data_hora_inicio DESC LIMIT $2 OFFSET $3`,
+      [funcionario_id, limit, offset]
+    );
+
+    // 4. Total para paginação
+    const totalCount = await query("SELECT COUNT(*) FROM agendamento WHERE funcionario_id = $1", [funcionario_id]);
 
     res.json({
-      resumo_status,
-      proximos_agendamentos,
-      historico,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages,
-        totalItems: count
-      }
+      proximos_agendamentos: proximos.rows,
+      historico: historico.rows,
+      total_geral: parseInt(totalCount.rows[0].count),
+      pagina_atual: parseInt(page)
     });
-
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ erro: "Erro ao carregar dashboard do funcionário." });
+    res.status(500).json({ erro: "Erro no dashboard do funcionário.", detalhes: error.message });
   }
 }
 
-
 // ==========================================
-// 2. DASHBOARD DO ADMIN (RF12 / RF14.7)
+// 2. DASHBOARD DO ADMIN
 // ==========================================
 export async function dashboard_admin(req, res) {
   try {
-    const { page = 1, limit = 20, status, inicio, fim } = req.query;
+    const { limit = 10 } = req.query;
 
-    // Filtros de agendamento
-    const filtroAgendamento = {};
-    if (status) filtroAgendamento.status = status;
-    if (inicio && fim) filtroAgendamento.data_hora_inicio = { [Op.between]: [new Date(inicio), new Date(fim)] };
+    // 1. Métricas Globais
+    const stats = await query(`
+      SELECT 
+        (SELECT COUNT(*) FROM cliente) as total_clientes,
+        (SELECT COUNT(*) FROM funcionario WHERE ativo = true) as total_funcionarios,
+        (SELECT COUNT(*) FROM agendamento WHERE data_hora_inicio::date = CURRENT_DATE) as agendamentos_hoje,
+        (SELECT COALESCE(SUM(valor), 0) FROM pagamento WHERE status = 'pago') as faturamento_total
+    `);
 
-    const offset = (page - 1) * limit;
+    // 2. Últimos Agendamentos do Sistema
+    const agendamentos = await query(`
+      SELECT 
+        a.id, u_cli.nome as cliente, u_func.nome as funcionario,
+        s.nome_servico, a.data_hora_inicio, sa.nome as status
+      FROM agendamento a
+      JOIN cliente c ON a.cliente_id = c.id
+      JOIN usuario u_cli ON c.usuario_id = u_cli.id
+      JOIN funcionario f ON a.funcionario_id = f.id
+      JOIN usuario u_func ON f.usuario_id = u_func.id
+      JOIN servico s ON a.servico_id = s.id
+      JOIN status_agendamento sa ON a.status_id = sa.id
+      ORDER BY a.criado_em DESC LIMIT $1`, 
+      [limit]
+    );
 
-    const { count, rows: agendamentos } = await Agendamento.findAndCountAll({
-      where: filtroAgendamento,
-      include: [
-        { model: Cliente, include: [{ model: Usuario, attributes: ['nome', 'email', 'numero_telefone'] }] },
-        { model: Servico, attributes: ['nome_servico', 'preco'] },
-        { model: Usuario, as: "funcionario", attributes: ['nome', 'apelido'] }
-      ],
-      order: [["data_hora_inicio", "ASC"]],
-      limit: parseInt(limit),
-      offset
-    });
-
-    const totalPages = Math.ceil(count / limit);
-
-    // Estatísticas rápidas
-    const total_clientes = await Cliente.count();
-    const total_funcionarios = await Funcionario.count();
-    const faturamento = await Pagamento.sum('valor', { where: { status: 'pago' } }) || 0;
+    // 3. Agendamentos por Status (Gráfico)
+    const porStatus = await query(`
+      SELECT sa.nome, COUNT(a.id) 
+      FROM agendamento a 
+      JOIN status_agendamento sa ON a.status_id = sa.id 
+      GROUP BY sa.nome
+    `);
 
     res.json({
-      utilizadores: { clientes: total_clientes, funcionarios: total_funcionarios },
-      agendamentos,
-      faturamento_total: faturamento,
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        totalPages,
-        totalItems: count
-      }
+      metricas: stats.rows[0],
+      ultimos_agendamentos: agendamentos.rows,
+      distribuicao_status: porStatus.rows
     });
-
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ erro: "Erro ao gerar dashboard administrativo." });
+    res.status(500).json({ erro: "Erro no dashboard admin.", detalhes: error.message });
+  }
+}
+
+// ==========================================
+// 3. DASHBOARD DO CLIENTE
+// ==========================================
+export async function dashboard_cliente(req, res) {
+  try {
+    const usuario_id = req.user.id;
+
+    // Buscar ID do cliente
+    const cliRes = await query("SELECT id FROM cliente WHERE usuario_id = $1", [usuario_id]);
+    if (cliRes.rows.length === 0) return res.status(404).json({ erro: "Cliente não encontrado." });
+    const cliente_id = cliRes.rows[0].id;
+
+    // Próximo agendamento (O que ele tem marcado agora)
+    const proximo = await query(`
+      SELECT 
+        a.data_hora_inicio, s.nome_servico, u_func.nome as funcionario_nome, sa.nome as status
+      FROM agendamento a
+      JOIN funcionario f ON a.funcionario_id = f.id
+      JOIN usuario u_func ON f.usuario_id = u_func.id
+      JOIN servico s ON a.servico_id = s.id
+      JOIN status_agendamento sa ON a.status_id = sa.id
+      WHERE a.cliente_id = $1 AND a.data_hora_inicio >= NOW() AND sa.nome != 'cancelado'
+      ORDER BY a.data_hora_inicio ASC LIMIT 1
+    `, [cliente_id]);
+
+    // Histórico de compras/serviços
+    const servicosRealizados = await query(`
+      SELECT COUNT(*) FROM agendamento a
+      JOIN status_agendamento sa ON a.status_id = sa.id
+      WHERE a.cliente_id = $1 AND sa.nome = 'concluido'
+    `, [cliente_id]);
+
+    res.json({
+      proximo_agendamento: proximo.rows[0] || null,
+      total_servicos_concluidos: parseInt(servicosRealizados.rows[0].count)
+    });
+  } catch (error) {
+    res.status(500).json({ erro: "Erro no dashboard cliente.", detalhes: error.message });
   }
 }

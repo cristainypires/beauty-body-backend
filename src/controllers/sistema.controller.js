@@ -1,115 +1,151 @@
-import { Op, fn, where, col } from "sequelize";
-import { Agendamento, Notificacao, Usuario, Cliente } from "../database";
-
+import { Op, fn, col, where } from "sequelize";
+import { 
+  Agendamento, Notificacao, Usuario, Cliente, 
+  StatusAgendamento, StatusNotificacao, CanalNotificacao 
+} from "../models/index.js";
 
 const sistema_Controller = {
 
   //////////////////////////////////////////////////////////////
-  // 1. LIMPAR PENDENTES 
+  // 1. LIMPAR PENDENTES (Expira agendamentos não pagos em 1h)
   //////////////////////////////////////////////////////////////
   async rotina_limpar_pendentes() {
     try {
-      const limite = new Date(Date.now() - 60 * 60 * 1000); 
-      const [cancelados] = await Agendamento.update(
-        { status: 'expirado' },
-        { where: { status: 'pendente', criado_em: { [Op.lt]: limite } } }
+      const limite = new Date(Date.now() - 60 * 60 * 1000); // 1 hora atrás
+      
+      const statusPendente = await StatusAgendamento.findOne({ where: { nome: 'pendente' } });
+      const statusCancelado = await StatusAgendamento.findOne({ where: { nome: 'cancelado' } });
+
+      const [atualizados] = await Agendamento.update(
+        { status_id: statusCancelado.id },
+        { 
+          where: { 
+            status_id: statusPendente.id, 
+            criado_em: { [Op.lt]: limite } 
+          } 
+        }
       );
-      if (cancelados > 0) console.log(`[SISTEMA] ${cancelados} agendamentos expirados por falta de pagamento.`);
-    } catch (e) { console.error("Erro na limpeza:", e); }
+      if (atualizados > 0) console.log(`[SISTEMA] ${atualizados} agendamentos expirados.`);
+    } catch (e) { console.error("Erro na rotina de limpeza:", e); }
   },
 
-  ///////////////////////////////////////////
-  // 2. MUDAR STATUS PARA CONCLUÍDO ////////
-  /////////////////////////////////////////////
+  //////////////////////////////////////////////////////////////
+  // 2. MUDAR STATUS PARA CONCLUÍDO (Após o horário do serviço)
+  //////////////////////////////////////////////////////////////
   async rotina_mudar_status_concluido() {
     try {
       const agora = new Date();
+      const statusConfirmado = await StatusAgendamento.findOne({ where: { nome: 'confirmado' } });
+      // Certifique-se de que 'concluido' existe na tabela status_agendamento
+      const statusConcluido = await StatusAgendamento.findOne({ where: { nome: 'concluido' } });
+
+      if (!statusConcluido) return console.log("Status 'concluido' não encontrado no banco.");
+
       await Agendamento.update(
-        { status: 'concluido' },
-        { where: { status: 'confirmado', data_hora_fim: { [Op.lt]: agora } } }
+        { status_id: statusConcluido.id },
+        { 
+          where: { 
+            status_id: statusConfirmado.id, 
+            data_hora_fim: { [Op.lt]: agora } 
+          } 
+        }
       );
     } catch (e) { console.error("Erro ao concluir serviços:", e); }
   },
 
-
-
-
-
-
   //////////////////////////////////////////////////////////////
-  // 3. DISPARAR LEMBRETES E NOTIFICAÇÕES 
+  // 3. LEMBRETE 24H (Dispara notificações para amanhã)
   //////////////////////////////////////////////////////////////
-  
-  // A. Lembrete de Agendamento (24h antes)
   async lembrete_24h() {
-    const amanha = new Date();
-    amanha.setDate(amanha.getDate() + 1);
-    const dataBusca = amanha.toISOString().split('T')[0];
+    try {
+      const amanhaInicio = new Date();
+      amanhaInicio.setDate(amanhaInicio.getDate() + 1);
+      amanhaInicio.setHours(0,0,0,0);
+      
+      const amanhaFim = new Date(amanhaInicio);
+      amanhaFim.setHours(23,59,59,999);
 
-    const agendamentos = await Agendamento.findAll({
-      where: { status: 'confirmado', data_servico: dataBusca },
-      include: [{ model: Cliente, include: [Usuario] }]
-    });
+      const statusConfirmado = await StatusAgendamento.findOne({ where: { nome: 'confirmado' } });
 
-    for (let ag of agendamentos) {
-      await this.criar_notificacao(ag.cliente.usuario_id, 'lembrete', 
-        `Olá ${ag.cliente.usuario.nome}! Você tem um agendamento amanhã às ${ag.hora_inicio}. no Maddie Beauty Boutique`, ag.id);
-    }
-  },
+      const agendamentos = await Agendamento.findAll({
+        where: { 
+          status_id: statusConfirmado.id, 
+          data_hora_inicio: { [Op.between]: [amanhaInicio, amanhaFim] } 
+        },
+        include: [{ model: Cliente, include: [Usuario] }]
+      });
 
-  // B. Notificação de Aniversário
-  async parabens_aniversariantes() {
-    const hoje = new Date();
-    const mes = hoje.getMonth() + 1;
-    const dia = hoje.getDate();
-
-    // Busca usuários que fazem anos hoje (usando funções do banco que a Raina preparou)
-    const aniversariantes = await Usuario.findAll({
-      where: [
-        where(fn('MONTH', col('data_nascimento')), mes),
-        where(fn('DAY', col('data_nascimento')), dia)
-      ]
-    });
-
-    for (let user of aniversariantes) {
-      await this.criar_notificacao(user.id, 'promocao', 
-        `Parabéns, ${user.nome}! Ganhe 10% de desconto em qualquer serviço hoje no Maddie beauty boutique!`);
-    }
-  },
-
-  // C. Notificação de Confirmação de Pagamento
-  async confirmar_pagamento_notificar(agendamento_id) {
-    const ag = await Agendamento.findByPk(agendamento_id, { include: [Cliente] });
-    if (ag) {
-      await this.criar_notificacao(ag.cliente_id, 'pagamento', 
-        `Pagamento confirmado! Seu serviço de ${ag.servico_id} está garantido.`);
-    }
-  },
-
-  // D. Enviar Promoções Gerais
-  async enviar_promocao_geral(titulo, mensagem) {
-    const clientes = await Cliente.findAll();
-    for (let c of clientes) {
-      await this.criar_notificacao(c.usuario_id, 'promocao', mensagem);
-    }
+      for (let ag of agendamentos) {
+        const hora = new Date(ag.data_hora_inicio).toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        await sistema_Controller.criar_notificacao(
+          ag.cliente.usuario_id, 
+          'lembrete', 
+          `Olá ${ag.cliente.usuario.nome}! Lembrete do seu agendamento amanhã às ${hora}.`, 
+          ag.id
+        );
+      }
+    } catch (e) { console.error("Erro nos lembretes 24h:", e); }
   },
 
   //////////////////////////////////////////////////////////////
-  // FUNÇÃO AUXILIAR: Criar registro na tabela NOTIFICACAO
+  // 4. ANIVERSARIANTES (Baseado na data_nascimento do usuario)
+  //////////////////////////////////////////////////////////////
+  async parabens_aniversariantes() {
+    try {
+      const hoje = new Date();
+      const mes = hoje.getMonth() + 1;
+      const dia = hoje.getDate();
+
+      // PostgreSQL sintaxe para extrair dia e mês
+      const aniversariantes = await Usuario.findAll({
+        where: {
+          [Op.and]: [
+            where(fn('EXTRACT', col('MONTH FROM data_nascimento')), mes),
+            where(fn('EXTRACT', col('DAY FROM data_nascimento')), dia)
+          ]
+        }
+      });
+
+      for (let user of aniversariantes) {
+        await sistema_Controller.criar_notificacao(
+          user.id, 
+          'promocao', 
+          `Parabéns ${user.nome}! Maddie Beauty Boutique te deseja um dia incrível. Use o cupom NIVER10 hoje!`
+        );
+      }
+    } catch (e) { console.error("Erro nos aniversariantes:", e); }
+  },
+
+  //////////////////////////////////////////////////////////////
+  // 5. FUNÇÃO INTERNA: CRIAR NOTIFICAÇÃO (Mapeia status e canais)
   //////////////////////////////////////////////////////////////
   async criar_notificacao(usuario_id, tipo, conteudo, agendamento_id = null) {
     try {
+      // Busca IDs de configuração baseados no seu SQL
+      const statusPendente = await StatusNotificacao.findOne({ where: { nome: 'pendente' } });
+      const canalWpp = await CanalNotificacao.findOne({ where: { nome: 'whatsapp' } });
+
       await Notificacao.create({
         usuario_id,
-        tipo, // 'pagamento', 'aniversario', 'promocao', 'lembrete'
-        conteudo,
         agendamento_id,
-        data_hora: new Date(),
-        status: 'pendente',
-        canal: 'whatsapp' // Definido como padrão do sistema
+        tipo, 
+        conteudo,
+        status_id: statusPendente.id,
+        canal_id: canalWpp.id,
+        data_hora: new Date()
       });
-      // Aqui o Ator SISTEMA chamaria a API do WhatsApp/SMS real
-    } catch (e) { console.error("Erro ao criar notificação:", e); }
+      
+      console.log(`[SISTEMA] Notificação de ${tipo} gerada para o Usuário ${usuario_id}`);
+    } catch (e) { console.error("Erro ao criar registro de notificação:", e); }
+  },
+
+  async enviar_promocao_geral(titulo, mensagem) {
+    try {
+      const clientes = await Cliente.findAll();
+      for (let c of clientes) {
+        await sistema_Controller.criar_notificacao(c.usuario_id, 'promocao', `${titulo}: ${mensagem}`);
+      }
+    } catch (e) { console.error("Erro na promoção geral:", e); }
   }
 };
 
