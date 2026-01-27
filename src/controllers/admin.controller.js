@@ -1,6 +1,10 @@
 import { query } from "../database/index.js";
 import bcrypt from "bcryptjs";
 import { Promocao } from "../models/index.js";
+import sequelize from "../config/database.js";
+import Usuario from "../models/Usuario.js";
+import Funcionario from "../models/Funcionario.js"; // <-- ESTA LINHA ESTÁ FALTANDO
+import ServicoFuncionario from "../models/ServicoFuncionario.js";
 
 const admin_Controller = {
   // ==========================================
@@ -31,28 +35,48 @@ const admin_Controller = {
   },
 
   async atualizar_servico(req, res) {
-    try {
-      const { servico_id } = req.params;
-      const { nome_servico, duracao_minutos, preco, ativo } = req.body;
-      const result = await query(
-        "UPDATE servico SET nome_servico=$1, duracao_minutos=$2, preco=$3, ativo=$4, atualizado_em=NOW() WHERE id=$5 RETURNING *",
-        [nome_servico, duracao_minutos, preco, ativo, servico_id],
-      );
-      res.json(result.rows[0]);
-    } catch (error) {
-      res.status(500).json({ erro: "Erro ao atualizar serviço" });
-    }
-  },
+  try {
+    const { id } = req.params; // Use 'id' em vez de 'servico_id'
+    const { nome_servico, duracao_minutos, preco, ativo } = req.body;
+    const result = await query(
+      "UPDATE servico SET nome_servico=$1, duracao_minutos=$2, preco=$3, ativo=$4, atualizado_em=NOW() WHERE id=$5 RETURNING *",
+      [nome_servico, duracao_minutos, preco, ativo, id],
+    );
+    res.json(result.rows[0]);
+  } catch (error) {
+    res.status(500).json({ erro: "Erro ao atualizar serviço" });
+  }
+},
 
   async remover_servico(req, res) {
-    try {
-      const { servico_id } = req.params;
-      await query("UPDATE servico SET ativo=false WHERE id=$1", [servico_id]);
-      res.json({ mensagem: "Serviço desativado com sucesso" });
-    } catch (error) {
-      res.status(500).json({ erro: "Erro ao remover serviço" });
+  try {
+    // IMPORTANTE: Mudei de 'servico_id' para 'id' para coincidir com o que vem da rota
+    const { id } = req.params; 
+
+    // O comando DELETE apaga a linha permanentemente do banco de dados
+    const result = await query("DELETE FROM servico WHERE id=$1", [id]);
+
+    // Verificamos se alguma linha foi realmente apagada
+    if (result.rowCount === 0) {
+      return res.status(404).json({ erro: "Serviço não encontrado" });
     }
-  },
+
+    res.json({ mensagem: "Serviço excluído permanentemente com sucesso" });
+  } catch (error) {
+    console.error(error);
+
+    // ERRO DE CHAVE ESTRANGEIRA:
+    // Se o serviço estiver vinculado a um agendamento já existente, 
+    // o banco de dados não deixará apagar para não quebrar o histórico.
+    if (error.code === '23503') { 
+      return res.status(400).json({ 
+        erro: "Não é possível apagar este serviço pois ele já foi usado em agendamentos. Tente apenas desativá-lo." 
+      });
+    }
+
+    res.status(500).json({ erro: "Erro ao excluir serviço do sistema" });
+  }
+},
 
   // ==========================================
   // 2. GERENCIAR FUNCIONÁRIOS (Usuario + Funcionario)
@@ -60,7 +84,7 @@ const admin_Controller = {
   async listar_funcionarios(req, res) {
     try {
       const result = await query(`
-        SELECT f.id, u.nome, u.apelido, u.email, u.numero_telefone, u.data_nascimento,
+        SELECT f.id, u.nome, u.apelido, u.email, u.numero_telefone AS telefone, u.palavra_passe AS palavra_passe , u.data_nascimento AS data_nascimento,
                f.funcao_especialidade, f.tipo, f.ativo
         FROM funcionario f
         JOIN usuario u ON f.usuario_id = u.id
@@ -73,93 +97,130 @@ const admin_Controller = {
   },
 
   async criar_funcionario(req, res) {
+    const t = await sequelize.transaction();
     try {
-      const {
-        nome,
-        apelido,
-        email,
-        numero_telefone,
-        palavra_passe,
-        funcao_especialidade,
-        tipo,
-      } = req.body;
+      const { nome, apelido, email, numero_telefone, palavra_passe, funcao_especialidade } = req.body;
+
       const hash = bcrypt.hashSync(palavra_passe, 10);
 
-      // Inserção em duas tabelas (Ideal usar Transaction no Pool se possível)
-      const userRes = await query(
-        "INSERT INTO usuario (nome, apelido, email, numero_telefone, palavra_passe, usuario_tipo) VALUES ($1, $2, $3, $4, $5, 'funcionario') RETURNING id",
-        [nome, apelido, email, numero_telefone, hash],
-      );
+      const novoUser = await Usuario.create({
+        nome, apelido, email, numero_telefone,
+        palavra_passe: hash,
+        usuario_tipo: 'funcionario'
+      }, { transaction: t });
 
-      const funcRes = await query(
-        "INSERT INTO funcionario (usuario_id, funcao_especialidade, tipo) VALUES ($1, $2, $3) RETURNING *",
-        [userRes.rows[0].id, funcao_especialidade, tipo || "funcionario"],
-      );
+      await Funcionario.create({
+        usuario_id: novoUser.id,
+        funcao_especialidade,
+        tipo: 'funcionario',
+        ativo: true
+      }, { transaction: t });
 
-      res.status(201).json(funcRes.rows[0]);
+      await t.commit();
+      res.status(201).json({ mensagem: "Criado com sucesso" });
     } catch (error) {
-      res.status(500).json({
-        erro: "Erro ao criar funcionário (Email ou Telefone duplicado)",
-      });
+      await t.rollback();
+      res.status(400).json({ erro: "Erro ao criar. Verifique se email/telefone já existem." });
     }
   },
 
-  async atualizar_funcionario(req, res) {
-    try {
-      const { funcionario_id } = req.params;
-      const { nome, apelido, funcao_especialidade, ativo } = req.body;
+ 
 
-      const func = await query(
-        "SELECT usuario_id FROM funcionario WHERE id=$1",
-        [funcionario_id],
-      );
+// src/controllers/admin.controller.js
 
-      await query("UPDATE usuario SET nome=$1, apelido=$2 WHERE id=$3", [
-        nome,
-        apelido,
-        func.rows[0].usuario_id,
-      ]);
-      await query(
-        "UPDATE funcionario SET funcao_especialidade=$1, ativo=$2 WHERE id=$3",
-        [funcao_especialidade, ativo, funcionario_id],
-      );
+async atualizar_funcionario(req, res) {
+  const t = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const { 
+      nome, apelido, email, numero_telefone, 
+      data_nascimento, funcao_especialidade, 
+      ativo, palavra_passe, servicos_ids 
+    } = req.body;
 
-      res.json({ mensagem: "Funcionário atualizado" });
-    } catch (error) {
-      res.status(500).json({ erro: "Erro ao atualizar funcionário" });
+    const func = await Funcionario.findByPk(id);
+    if (!func) {
+      await t.rollback();
+      return res.status(404).json({ erro: "Funcionário não encontrado" });
     }
-  },
 
-  async remover_funcionario(req, res) {
-    try {
-      const { id } = req.params;
-      const result = await query(
-        "SELECT usuario_id FROM funcionario WHERE id=$1",
-        [id],
-      );
+    // 1. Atualizar Usuário
+    const dadosUsuario = { nome, apelido, email, numero_telefone, data_nascimento };
+    if (palavra_passe) {
+      dadosUsuario.palavra_passe = bcrypt.hashSync(palavra_passe, 10);
+    }
+    await Usuario.update(dadosUsuario, { where: { id: func.usuario_id }, transaction: t });
 
-      if (!result.rows.length) {
-        return res.status(404).json({ erro: "Funcionário não encontrado" });
+    // 2. Atualizar Funcionário
+    await func.update({ funcao_especialidade, ativo }, { transaction: t });
+
+    // 3. Sincronizar Serviços (A parte que está dando erro)
+    if (servicos_ids && Array.isArray(servicos_ids)) {
+      // Remove associações antigas
+      await ServicoFuncionario.destroy({ where: { funcionario_id: id }, transaction: t });
+      
+      // Cria novas se houver IDs selecionados
+      if (servicos_ids.length > 0) {
+        const novasAssoc = servicos_ids.map(sId => ({
+          funcionario_id: id,
+          servico_id: sId,
+          habilitado: true
+        }));
+        await ServicoFuncionario.bulkCreate(novasAssoc, { transaction: t });
       }
-
-      await query("UPDATE funcionario SET ativo=false WHERE id=$1", [id]);
-      res.json({ mensagem: "Funcionário removido com sucesso" });
-    } catch (error) {
-      res.status(500).json({ erro: "Erro ao remover funcionário" });
     }
-  },
+
+    await t.commit();
+    res.json({ mensagem: "Profissional atualizado com sucesso!" });
+
+  } catch (error) {
+    await t.rollback();
+    console.error("ERRO REAL NO BACKEND:", error); // OLHE O TERMINAL DO VSCODE/NODE PARA VER ISSO
+    res.status(500).json({ erro: "Erro ao sincronizar serviços", detalhe: error.message });
+  }
+},
+
+// REMOVER COMPLETAMENTE (Apaga do sistema)
+async remover_funcionario(req, res) {
+  const t = await sequelize.transaction();
+  try {
+    const { id } = req.params;
+    const func = await Funcionario.findByPk(id);
+    
+    if (!func) return res.status(404).json({ erro: "Não encontrado" });
+
+    const usuarioId = func.usuario_id;
+
+    // Remove primeiro o funcionário, depois o usuário (por causa da FK)
+    await func.destroy({ transaction: t });
+    await Usuario.destroy({ where: { id: usuarioId }, transaction: t });
+
+    await t.commit();
+    res.json({ mensagem: "Funcionário e usuário removidos permanentemente" });
+  } catch (error) {
+    await t.rollback();
+    res.status(500).json({ erro: "Erro ao excluir (possui agendamentos vinculados?)" });
+  }
+},
 
   // ==========================================
   // 3. GERENCIAR CLIENTES
   // ==========================================
   async listar_clientes(req, res) {
     try {
-      const result = await query(`
-        SELECT c.id, u.nome, u.apelido, u.email, u.numero_telefone, u.criado_em, u.email_verificado as ativo
-        FROM cliente c
-        JOIN usuario u ON c.usuario_id = u.id
-        ORDER BY u.nome ASC
-      `);
+const result = await query(`
+  SELECT 
+    c.id, 
+    u.nome, 
+    u.apelido, 
+    u.email, 
+    u.numero_telefone AS telefone, 
+    u.criado_em AS desde,           -- Forçamos o nome para 'desde'
+    u.email_verificado as ativo
+  FROM cliente c
+  JOIN usuario u ON c.usuario_id = u.id
+  ORDER BY u.nome ASC
+`);
       res.json(result.rows);
     } catch (error) {
       res.status(500).json({ erro: "Erro ao listar clientes" });

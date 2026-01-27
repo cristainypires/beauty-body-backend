@@ -13,6 +13,7 @@ const Funcionario = sequelize.define(
       type: DataTypes.INTEGER,
       unique: true,
     },
+    
     tipo: {
       type: DataTypes.STRING(20),
       defaultValue: "funcionario",

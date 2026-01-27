@@ -29,11 +29,11 @@ router.post("/clientes/:id/desativar", admin_Controller.desativar_cliente);
 router.get("/agendamentos", admin_Controller.listar_agendamentos); // Sem o prefixo /admin aqui
 router.patch(
   "/agendamentos/:id/cancelar",
-  admin_Controller.cancelar_agendamento
+  admin_Controller.cancelar_agendamento,
 );
 router.patch(
   "/agendamentos/:id/reagendar",
-  admin_Controller.reagendar_agendamento
+  admin_Controller.reagendar_agendamento,
 );
 
 // Promoções

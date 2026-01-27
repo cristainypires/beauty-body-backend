@@ -24,10 +24,13 @@ const Servico = sequelize.define(
       defaultValue: true,
     },
   },
-  {
-    tableName: "servico",
-    timestamps: true,
-  }
+  // Dentro da definição do modelo Servico
+{
+  sequelize,
+  modelName: 'Servico',
+  tableName: 'servico',
+  timestamps: false, // <--- ADICIONE ISSO AQUI
+}
 );
 
 export default Servico;

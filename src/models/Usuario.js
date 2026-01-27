@@ -47,10 +47,13 @@ const Usuario = sequelize.define(
       defaultValue: false,
     },
   },
-  {
-    tableName: "usuario",
-    timestamps: true,
-  }
+  // Procure a definição do modelo Usuario
+{
+  sequelize,
+  modelName: 'Usuario',
+  tableName: 'usuario',
+  timestamps: false, 
+}
 );
 
 export default Usuario;
