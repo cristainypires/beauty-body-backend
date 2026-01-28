@@ -1,23 +1,28 @@
 import bcrypt from "bcryptjs";
-import pool from "../database/index.js";
+import pool from "../database/index.js"; // Aqui 'pool' é uma instância do Sequelize
 import { gerarToken } from "../utils/Jwt.js";
 
 export async function login(req, res) {
   const { email, password, palavra_passe } = req.body;
-  const senha = password || palavra_passe; // Aceita ambos os nomes
+  const senha = password || palavra_passe;
 
   try {
     // 1. Buscar usuário na tabela 'usuario'
-    const userRes = await pool.query(
+    // No Sequelize, usamos { bind: [valor] } para preencher o $1
+    const usuarios = await pool.query(
       "SELECT id, nome, email, palavra_passe, usuario_tipo FROM usuario WHERE email = $1",
-      [email]
+      {
+        bind: [email],
+        type: pool.QueryTypes.SELECT, // Indica que é uma consulta de seleção
+      }
     );
 
-    if (userRes.rowCount === 0) {
+    // O Sequelize retorna um array de objetos diretamente em SELECT
+    if (!usuarios || usuarios.length === 0) {
       return res.status(401).json({ message: "Credenciais inválidas" });
     }
 
-    const usuario = userRes.rows[0];
+    const usuario = usuarios[0];
 
     // 2. Validar a senha criptografada
     const senhaOk = bcrypt.compareSync(senha, usuario.palavra_passe);
@@ -30,36 +35,42 @@ export async function login(req, res) {
     let role = usuario.usuario_tipo;
 
     if (role === "funcionario") {
-      const funcRes = await pool.query(
+      const funcionarios = await pool.query(
         "SELECT tipo FROM funcionario WHERE usuario_id = $1",
-        [usuario.id]
+        {
+          bind: [usuario.id],
+          type: pool.QueryTypes.SELECT,
+        }
       );
 
-      if (funcRes.rowCount > 0 && funcRes.rows[0].tipo === "profissional") {
+      if (funcionarios.length > 0 && funcionarios[0].tipo === "profissional") {
         role = "profissional";
       }
     }
 
     // 4. Buscar o ID do perfil específico
     let perfil_id = null;
+    
     if (role === "admin") {
-      const resAdmin = await pool.query(
+      const admins = await pool.query(
         "SELECT id FROM admin WHERE usuario_id = $1",
-        [usuario.id]
+        { bind: [usuario.id], type: pool.QueryTypes.SELECT }
       );
-      perfil_id = resAdmin.rows[0]?.id;
-    } else if (role === "funcionario" || role === "profissional") {
-      const resFunc = await pool.query(
+      perfil_id = admins[0]?.id;
+    } 
+    else if (role === "funcionario" || role === "profissional") {
+      const funcs = await pool.query(
         "SELECT id FROM funcionario WHERE usuario_id = $1",
-        [usuario.id]
+        { bind: [usuario.id], type: pool.QueryTypes.SELECT }
       );
-      perfil_id = resFunc.rows[0]?.id;
-    } else if (role === "cliente") {
-      const resCli = await pool.query(
+      perfil_id = funcs[0]?.id;
+    } 
+    else if (role === "cliente") {
+      const clientes = await pool.query(
         "SELECT id FROM cliente WHERE usuario_id = $1",
-        [usuario.id]
+        { bind: [usuario.id], type: pool.QueryTypes.SELECT }
       );
-      perfil_id = resCli.rows[0]?.id;
+      perfil_id = clientes[0]?.id;
     }
 
     // 5. Gerar Token JWT

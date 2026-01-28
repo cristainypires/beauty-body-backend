@@ -1,6 +1,7 @@
 import { DataTypes } from "sequelize";
 import sequelize from "../config/database.js";
 
+
 const AuditoriaLog = sequelize.define(
   "AuditoriaLog",
   {
@@ -22,7 +23,7 @@ const AuditoriaLog = sequelize.define(
   },
   {
     tableName: "auditoria_logs",
-    timestamps: true,
+    timestamps: false,
   }
 );
 

@@ -1,7 +1,7 @@
 import express from "express";
 import admin_Controller from "../controllers/admin.controller.js";
 import { autenticar } from "../middlewares/auth.js";
-import RoleMiddleware from "../middlewares/RoleMiddleware.js"; // Importe aqui
+import RoleMiddleware from "../middlewares/RoleMiddleware.js";
 
 const router = express.Router();
 
@@ -40,6 +40,7 @@ router.patch(
 router.get("/promocoes", admin_Controller.listar_promocoes);
 router.post("/promocoes", admin_Controller.criar_promocao);
 router.put("/promocoes/:id", admin_Controller.atualizar_promocao);
+router.delete("/promocoes/:id", admin_Controller.remover_promocao);
 
 // Auditoria / Logs
 router.get("/logs", admin_Controller.visualizar_logs);

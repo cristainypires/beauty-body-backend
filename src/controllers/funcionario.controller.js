@@ -204,6 +204,12 @@ const funcionario_Controller = {
       ORDER BY data_hora_inicio ASC
     `, [funcionario_id]);
 
+
+await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Visualizacao de Agenda",
+      detalhes: `O funcionario '${req.body.funcionario_id}' foi ver sua agenda.`
+    });
     // Retornamos o objeto formatado para o front
     return res.json({
       profissional: profResult.rows[0] || { nome: "Não encontrado", ativo: false },
@@ -271,8 +277,15 @@ async marcar_disponibilidade(req, res) {
 
     // FINALIZAR TRANSAÇÃO (SALVAR)
     await client.query("COMMIT");
+    await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Marcação de Disponibilidade",
+      detalhes: `O funcionario '${req.body.funcionario_id}' sua disponibilidade foi marcada.`
+    });
 
     return res.json({ mensagem: "Agenda do profissional atualizada! ✅" });
+
+    
 
   } catch (erro) {
     // SE DER ERRO, DESFAZ TUDO
@@ -308,7 +321,11 @@ async bloquear_horario(req, res) {
         motivo || "Imprevisto / Bloqueio Manual"
       ]
     );
-
+await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Horario Bloqueado",
+      detalhes: `O funcionario '${req.body.funcionario_id}' foi bloquear um Horario.`
+    });
     return res.json({ mensagem: "Horário bloqueado com sucesso! Este período não aparecerá mais como disponível para os clientes. 🔒" });
 
   } catch (e) {
@@ -331,7 +348,11 @@ async marcar_ferias(req, res) {
       "UPDATE funcionario SET ativo = false WHERE id = $1",
       [funcionario_id]
     );
-
+await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Marcação de ferias",
+      detalhes: `O funcionario '${req.body.funcionario_id}' foi marcar sua feria para ${data_inicio} a ${data_fim}.`
+    });
     return res.json({ 
       mensagem: `Férias registadas com sucesso de ${data_inicio} a ${data_fim}! O profissional está agora inativo.` 
     });

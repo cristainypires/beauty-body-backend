@@ -3,8 +3,10 @@ import bcrypt from "bcryptjs";
 import { Promocao } from "../models/index.js";
 import sequelize from "../config/database.js";
 import Usuario from "../models/Usuario.js";
-import Funcionario from "../models/Funcionario.js"; // <-- ESTA LINHA ESTÁ FALTANDO
+import Funcionario from "../models/Funcionario.js"; 
 import ServicoFuncionario from "../models/ServicoFuncionario.js";
+import Servico from "../models/Servico.js"; 
+import AuditoriaLog from "../models/AuditoriaLog.js"; 
 
 const admin_Controller = {
   // ==========================================
@@ -28,6 +30,12 @@ const admin_Controller = {
         "INSERT INTO servico (nome_servico, duracao_minutos, preco) VALUES ($1, $2, $3) RETURNING *",
         [nome_servico, duracao_minutos, preco],
       );
+
+      await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Criação de um servico",
+      detalhes: `o servico '${req.body.nome_servico}' foi criado.`
+    });
       res.status(201).json(result.rows[0]);
     } catch (error) {
       res.status(500).json({ erro: "Erro ao criar serviço" });
@@ -42,6 +50,11 @@ const admin_Controller = {
       "UPDATE servico SET nome_servico=$1, duracao_minutos=$2, preco=$3, ativo=$4, atualizado_em=NOW() WHERE id=$5 RETURNING *",
       [nome_servico, duracao_minutos, preco, ativo, id],
     );
+    await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Atualização de um servico",
+      detalhes: `O servico '${id}' foi atualizado.`
+    });
     res.json(result.rows[0]);
   } catch (error) {
     res.status(500).json({ erro: "Erro ao atualizar serviço" });
@@ -60,7 +73,11 @@ const admin_Controller = {
     if (result.rowCount === 0) {
       return res.status(404).json({ erro: "Serviço não encontrado" });
     }
-
+await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Remoção de um servico",
+      detalhes: `O servico '${id}' foi removido.`
+    });
     res.json({ mensagem: "Serviço excluído permanentemente com sucesso" });
   } catch (error) {
     console.error(error);
@@ -118,6 +135,11 @@ const admin_Controller = {
 
       await t.commit();
       res.status(201).json({ mensagem: "Criado com sucesso" });
+      await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Criação de um Funcionario",
+      detalhes: `O funcionario '${id}' foi criado.`
+    });
     } catch (error) {
       await t.rollback();
       res.status(400).json({ erro: "Erro ao criar. Verifique se email/telefone já existem." });
@@ -172,7 +194,11 @@ async atualizar_funcionario(req, res) {
 
     await t.commit();
     res.json({ mensagem: "Profissional atualizado com sucesso!" });
-
+await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Atualização de um funcionario",
+      detalhes: `O Funcionario '${id}' foi atualizado.`
+    });
   } catch (error) {
     await t.rollback();
     console.error("ERRO REAL NO BACKEND:", error); // OLHE O TERMINAL DO VSCODE/NODE PARA VER ISSO
@@ -194,6 +220,11 @@ async remover_funcionario(req, res) {
     // Remove primeiro o funcionário, depois o usuário (por causa da FK)
     await func.destroy({ transaction: t });
     await Usuario.destroy({ where: { id: usuarioId }, transaction: t });
+await AuditoriaLog.create({
+  usuario_id: req.usuarioId, // ID do admin logado (vem do token)
+  descricao: "Eliminação de Funcionário",
+  detalhes: `O funcionário com ID ${id} foi removido permanentemente.`
+});
 
     await t.commit();
     res.json({ mensagem: "Funcionário e usuário removidos permanentemente" });
@@ -241,6 +272,11 @@ const result = await query(`
       await query("UPDATE usuario SET email_verificado=false WHERE id=$1", [
         cli.rows[0].usuario_id,
       ]);
+      await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Desativação de um cliente",
+      detalhes: `Cliente '${id}' foi desativado.`
+    });
       res.json({ mensagem: "Cliente desativado" });
     } catch (error) {
       res.status(500).json({ erro: "Erro ao desativar cliente" });
@@ -261,6 +297,11 @@ const result = await query(`
       await query("UPDATE usuario SET email_verificado=true WHERE id=$1", [
         cli.rows[0].usuario_id,
       ]);
+      await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Ativação de um cliente",
+      detalhes: `Cliente '${id}' foi Ativado.`
+    });
       res.json({ mensagem: "Cliente ativado" });
     } catch (error) {
       res.status(500).json({ erro: "Erro ao ativar cliente" });
@@ -301,6 +342,12 @@ const result = await query(`
         status.rows[0].id,
         req.params.agendamento_id,
       ]);
+
+      await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Agendamento Cancelado",
+      detalhes: `Agendamento '${id}' foi desativado.`
+    });
       res.json({ mensagem: "Cancelado" });
     } catch (error) {
       res.status(500).json({ erro: "Erro" });
@@ -357,6 +404,13 @@ const result = await query(`
         mensagem: "Agendamento reagendado com sucesso",
         agendamento: result.rows[0],
       });
+      
+ await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Agendamento reagendado",
+      detalhes: `Agendamento '${id}' foi reagendado.`
+    });
+      
     } catch (error) {
       res.status(500).json({ erro: "Erro ao reagendar agendamento" });
     }
@@ -365,85 +419,156 @@ const result = await query(`
   // ==========================================
   // 7. GERENCIAR PROMOÇÕES
   // ==========================================
-  async listar_promocoes(req, res) {
+   async visualizar_logs(req, res) {
+  try {
+    const logs = await AuditoriaLog.findAll({
+      include: [{
+        model: Usuario,
+        as: 'usuario',
+        attributes: ['nome', 'usuario_tipo']
+      }],
+      order: [["id", "DESC"]], //  Ordena pelo ID já que não temos a data
+      limit: 100
+    });
+
+    const formatados = logs.map(log => {
+      // Como não temos a coluna de data no banco, usamos a data atual 
+      // ou uma string fixa até você criar a coluna no banco
+      const dataCriacao = new Date(); 
+
+      return {
+        id: log.id,
+        data: dataCriacao.toISOString().split('T')[0],
+        hora: dataCriacao.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+        ator: log.usuario ? log.usuario.usuario_tipo.toUpperCase() : "SISTEMA",
+        descricao: log.descricao,
+        detalhes: log.detalhes || "",
+        usuario_nome: log.usuario ? log.usuario.nome : "Sistema"
+      };
+    });
+
+    res.json(formatados);
+  } catch (error) {
+    console.error("ERRO LOGS:", error);
+    res.status(500).json({ erro: "Erro ao carregar logs" });
+  }
+},
+
+
+
+   async listar_promocoes(req, res) {
     try {
       const promocoes = await Promocao.findAll({
-        order: [["nome", "ASC"]],
+        include: [{
+          model: Servico,
+          as: 'servicos', 
+          attributes: ['id'],
+          through: { attributes: [] } 
+        }],
+        order: [["id", "DESC"]],
       });
 
-      // Formata datas para evitar 'Invalid Date' no front
-      const promocoesFormatadas = promocoes.map((p) => ({
-        id: p.id,
-        nome: p.nome,
-        descricao: p.descricao,
-        tipo: p.tipo,
-        valor: p.valor,
-       data_inicio: p.data_inicio
-  ? new Date(p.data_inicio).toISOString().split("T")[0]
-  : null,
-data_fim: p.data_fim
-  ? new Date(p.data_fim).toISOString().split("T")[0]
-  : null,
+      const formatadas = promocoes.map((p) => {
+        const pJson = p.get({ plain: true });
+        return {
+          id: pJson.id,
+          titulo: pJson.nome,
+          descricao: pJson.descricao,
+          tipo: pJson.tipo,
+          valor: pJson.valor,
+          validade: pJson.data_fim,
+          ativo: pJson.ativo,
+          servicos_ids: pJson.servicos ? pJson.servicos.map(s => s.id) : []
+        };
+      });
 
-        ativo: p.ativo,
-      }));
-
-      res.json(promocoesFormatadas);
+      res.json(formatadas);
     } catch (error) {
       console.error("[ERRO LISTAR PROMOÇÕES]", error);
       res.status(500).json({ erro: error.message });
     }
   },
 
+
   async criar_promocao(req, res) {
-    try {
-      const { nome, descricao, tipo, valor, data_inicio, data_fim } = req.body;
+  try {
+    const { titulo, descricao, tipo, valor, validade, servicos_ids } = req.body;
 
-      // Validação simples
-      if (!nome || !tipo || !valor || !data_inicio || !data_fim) {
-        return res
-          .status(400)
-          .json({ erro: "Todos os campos obrigatórios devem ser preenchidos" });
-      }
+    const novaPromocao = await Promocao.create({
+      nome: titulo,
+      descricao: descricao || "",
+      tipo: tipo === "desconto" ? "percentual" : tipo, // Correção do erro de constraint
+      valor: valor || 0,
+      data_inicio: new Date(),
+      data_fim: validade,
+      ativo: true,
+    });
 
-      const promocao = await Promocao.create({
-        nome,
-        descricao,
-        tipo,
-        valor,
-        data_inicio,
-        data_fim,
-        ativo: true,
-      });
-
-      res.status(201).json(promocao);
-    } catch (error) {
-      console.error("[ERRO CRIAR PROMOÇÃO]", error);
-      res.status(500).json({ erro: error.message });
+    // Se vierem IDs de serviços, o Sequelize cria a ligação na tabela promocao_servico
+    if (servicos_ids && servicos_ids.length > 0) {
+      await novaPromocao.setServicos(servicos_ids); 
     }
-  },
+await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Criação de Promoção",
+      detalhes: `A promoção '${req.body.titulo}' foi criada.`
+    });
+    res.status(201).json(novaPromocao);
+  } catch (error) {
+    res.status(500).json({ erro: error.message });
+  }
+},
+
   async atualizar_promocao(req, res) {
     try {
       const { id } = req.params;
-      const { nome, descricao, tipo, valor, data_inicio, data_fim, ativo } =
-        req.body;
+      const { titulo, descricao, tipo, valor, validade, ativo } = req.body;
 
-      const result = await query(
-        `UPDATE promocao SET nome=$1, descricao=$2, tipo=$3, valor=$4, 
-                data_inicio=$5, data_fim=$6, ativo=$7 WHERE id=$8 RETURNING *`,
-        [nome, descricao, tipo, valor, data_inicio, data_fim, ativo, id],
-      );
-
-      if (!result.rows.length) {
+      const promocao = await Promocao.findByPk(id);
+      if (!promocao) {
         return res.status(404).json({ erro: "Promoção não encontrada" });
       }
 
-      res.json(result.rows[0]);
+      // Atualiza usando Sequelize (evita erro de query SQL pura)
+      await promocao.update({
+        nome: titulo !== undefined ? titulo : promocao.nome,
+        descricao: descricao !== undefined ? descricao : promocao.descricao,
+        tipo: tipo !== undefined ? tipo : promocao.tipo,
+        valor: valor !== undefined ? valor : promocao.valor,
+        data_fim: validade !== undefined ? validade : promocao.data_fim,
+        ativo: ativo !== undefined ? ativo : promocao.ativo
+      });
+      
+await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Atualização de Promoção",
+      detalhes: `A promoção '${req.body.titulo}' foi atualizado.`
+    });
+      res.json(promocao);
     } catch (error) {
-      console.error("[ERRO ATUALIZAR PROMOÇÃO]", error.message);
+      console.error("[ERRO ATUALIZAR PROMOÇÃO]", error);
       res.status(500).json({ erro: error.message });
     }
   },
+
+  async remover_promocao(req, res) {
+    try {
+      const { id } = req.params;
+      const deletado = await Promocao.destroy({ where: { id } });
+      
+      if (!deletado) {
+        return res.status(404).json({ erro: "Promoção não encontrada" });
+      }
+      await AuditoriaLog.create({
+      usuario_id: req.usuarioId, // ID do admin que está logado
+      descricao: "Remoção de Promoção",
+      detalhes: `A promoção '${req.body.titulo}' foi removida.`
+    });
+      res.json({ mensagem: "Promocao removida com sucesso" });
+    } catch (error) {
+      res.status(500).json({ erro: error.message });
+    }
+  }
 };
 
 export default admin_Controller;

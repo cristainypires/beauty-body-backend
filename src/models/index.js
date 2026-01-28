@@ -79,6 +79,28 @@ StatusLembrete.hasMany(Lembrete, { foreignKey: "status_id" });
 
 Lembrete.belongsTo(CanalLembrete, { foreignKey: "canal_id" });
 CanalLembrete.hasMany(Lembrete, { foreignKey: "canal_id" });
+// No seu arquivo de associações ou no final do arquivo de Models
+Promocao.belongsToMany(Servico, { 
+  through: PromocaoServico, // O modelo da tabela de ligação que você enviou antes
+  foreignKey: 'promocao_id',
+  otherKey: 'servico_id',
+  as: 'servicos' 
+});
+
+Servico.belongsToMany(Promocao, { 
+  through: PromocaoServico, 
+  foreignKey: 'servico_id',
+  otherKey: 'promocao_id',
+  as: 'promocoes' 
+});
+
+
+// Procure por AuditoriaLog e adicione a ligação se não houver
+AuditoriaLog.belongsTo(Usuario, { foreignKey: "usuario_id", as: "usuario" });
+Usuario.hasMany(AuditoriaLog, { foreignKey: "usuario_id" });
+
+
+
 
 export {
   Usuario,
