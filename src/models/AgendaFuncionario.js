@@ -28,7 +28,7 @@ const AgendaFuncionario = sequelize.define(
   },
   {
     tableName: "agenda_funcionario",
-    timestamps: true,
+    timestamps: false,
   }
 );
 

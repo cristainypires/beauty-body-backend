@@ -99,52 +99,78 @@ await AuditoriaLog.create({
   // 2. GERENCIAR FUNCIONÁRIOS (Usuario + Funcionario)
   // ==========================================
   async listar_funcionarios(req, res) {
-    try {
-      const result = await query(`
-        SELECT f.id, u.nome, u.apelido, u.email, u.numero_telefone AS telefone, u.palavra_passe AS palavra_passe , u.data_nascimento AS data_nascimento,
-               f.funcao_especialidade, f.tipo, f.ativo
-        FROM funcionario f
-        JOIN usuario u ON f.usuario_id = u.id
-        ORDER BY u.nome ASC
-      `);
-      res.json(result.rows);
-    } catch (error) {
-      res.status(500).json({ erro: "Erro ao listar funcionários" });
-    }
-  },
+  try {
+    const result = await query(`
+      SELECT 
+        f.id, 
+        u.nome, 
+        u.apelido, 
+        u.email, 
+        u.numero_telefone AS telefone, 
+        u.data_nascimento,
+        f.funcao_especialidade, 
+        f.tipo, 
+        f.ativo,
+        -- Esta parte busca os serviços associados e transforma em JSON
+        (
+          SELECT COALESCE(json_agg(json_build_object(
+            'id', s.id,
+            'nome_servico', s.nome_servico
+          )), '[]')
+          FROM servico_funcionario sf
+          JOIN servico s ON sf.servico_id = s.id
+          WHERE sf.funcionario_id = f.id
+        ) AS servicos
+      FROM funcionario f
+      JOIN usuario u ON f.usuario_id = u.id
+      ORDER BY u.nome ASC
+    `);
+    res.json(result.rows);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ erro: "Erro ao listar funcionários" });
+  }
+},
 
   async criar_funcionario(req, res) {
-    const t = await sequelize.transaction();
-    try {
-      const { nome, apelido, email, numero_telefone, palavra_passe, funcao_especialidade } = req.body;
+  const t = await sequelize.transaction();
+  try {
+    const { nome, apelido, email, numero_telefone, palavra_passe, funcao_especialidade, servicos_ids } = req.body;
 
-      const hash = bcrypt.hashSync(palavra_passe, 10);
+    const hash = bcrypt.hashSync(palavra_passe, 10);
 
-      const novoUser = await Usuario.create({
-        nome, apelido, email, numero_telefone,
-        palavra_passe: hash,
-        usuario_tipo: 'funcionario'
-      }, { transaction: t });
+    const novoUser = await Usuario.create({
+      nome, apelido, email, numero_telefone,
+      palavra_passe: hash,
+      usuario_tipo: 'funcionario'
+    }, { transaction: t });
 
-      await Funcionario.create({
-        usuario_id: novoUser.id,
-        funcao_especialidade,
-        tipo: 'funcionario',
-        ativo: true
-      }, { transaction: t });
+    const novoFunc = await Funcionario.create({
+      usuario_id: novoUser.id,
+      funcao_especialidade,
+      tipo: 'funcionario',
+      ativo: true
+    }, { transaction: t });
 
-      await t.commit();
-      res.status(201).json({ mensagem: "Criado com sucesso" });
-      await AuditoriaLog.create({
-      usuario_id: req.usuarioId, // ID do admin que está logado
-      descricao: "Criação de um Funcionario",
-      detalhes: `O funcionario '${id}' foi criado.`
-    });
-    } catch (error) {
-      await t.rollback();
-      res.status(400).json({ erro: "Erro ao criar. Verifique se email/telefone já existem." });
+    // ASSOCIAÇÃO COM SERVIÇOS
+    if (servicos_ids && Array.isArray(servicos_ids) && servicos_ids.length > 0) {
+      const vinculacoes = servicos_ids.map(sId => ({
+        funcionario_id: novoFunc.id,
+        servico_id: sId,
+        habilitado: true
+      }));
+      await ServicoFuncionario.bulkCreate(vinculacoes, { transaction: t });
     }
-  },
+
+    await t.commit();
+    
+    // Log de auditoria...
+    res.status(201).json({ mensagem: "Funcionário criado com sucesso e associado aos serviços." });
+  } catch (error) {
+    await t.rollback();
+    res.status(400).json({ erro: "Erro ao criar funcionário.", detalhe: error.message });
+  }
+},
 
  
 

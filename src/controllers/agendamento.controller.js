@@ -1,6 +1,3 @@
-import { Op } from "sequelize";
-import bcryptjs from "bcryptjs";
-
 import {
   Agendamento,
   Servico,
@@ -11,7 +8,16 @@ import {
   Usuario,
 } from "../models/index.js";
 import sequelize from "../config/database.js";
+import { Op } from "sequelize";
+import bcryptjs from "bcryptjs";
+import dayjs from "dayjs";
+import utc from "dayjs/plugin/utc.js";
+import timezone from "dayjs/plugin/timezone.js";
 
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const FUSO_CABO_VERDE = "Atlantic/Cape_Verde";
 const agendamento_Controller = {
   // --- FUNÇÕES AUXILIARES ---
   async _getClienteId(usuario_id) {
@@ -29,6 +35,7 @@ const agendamento_Controller = {
   // No seu agendamento.controller.js
   async fazer_agendamento(req, res) {
     const t = await sequelize.transaction();
+
     try {
       const {
         servico_id,
@@ -42,163 +49,161 @@ const agendamento_Controller = {
 
       let final_cliente_id = cliente_id;
 
-      // --- 1. VERIFICAÇÕES PARA NOVO CLIENTE ---
-      if (!final_cliente_id && novo_cliente_nome) {
-        const telefoneLimpo = novo_cliente_telefone
-          .replace(/\D/g, "")
-          .slice(0, 7);
+      // --- 1. IDENTIFICAÇÃO DO CLIENTE (MUITO IMPORTANTE) ---
 
-        if (telefoneLimpo.length !== 7) {
-          await t.rollback();
-          return res
-            .status(400)
-            .json({ erro: "O telefone deve ter exatamente 7 números." });
-        }
-
-        // A) Verificar se o E-MAIL já existe
-        const existeEmail = await Usuario.findOne({
-          where: { email: novo_cliente_email },
-          attributes: ["id", "nome"],
+      // Caso a recepcionista tenha preenchido os campos de "Novo Cadastro"
+      if (!final_cliente_id && novo_cliente_email) {
+        // Verificamos se esse e-mail já existe no banco (ex: Marcelo Morais)
+        let usuario = await Usuario.findOne({
+          where: sequelize.where(
+            sequelize.fn("LOWER", sequelize.col("email")),
+            novo_cliente_email.toLowerCase(),
+          ),
         });
-        if (existeEmail) {
-          await t.rollback();
-          return res.status(400).json({
-            erro: `O e-mail '${novo_cliente_email}' já pertence a '${existeEmail.nome}'. Verifique na aba 'Cliente da Casa'.`,
-          });
+
+        if (!usuario) {
+          // Se não existe, criamos o usuário novo
+          const passwordHash = await bcryptjs.hash(novo_cliente_telefone, 10);
+          usuario = await Usuario.create(
+            {
+              nome: novo_cliente_nome,
+              apelido: novo_cliente_nome,
+              email: novo_cliente_email,
+              numero_telefone: novo_cliente_telefone,
+              palavra_passe: passwordHash,
+              usuario_tipo: "cliente",
+            },
+            { transaction: t },
+          );
         }
 
-        // B) Verificar se o TELEFONE já existe
-        const existeTelefone = await Usuario.findOne({
-          where: { numero_telefone: telefoneLimpo },
-          attributes: ["id", "nome"],
+        // Agora garantimos que esse usuário (novo ou antigo) tem um perfil na tabela 'cliente'
+        let clientePerfil = await Cliente.findOne({
+          where: { usuario_id: usuario.id },
         });
-        if (existeTelefone) {
-          await t.rollback();
-          return res.status(400).json({
-            erro: `O telefone '${telefoneLimpo}' já está cadastrado para '${existeTelefone.nome}'.`,
-          });
+
+        if (!clientePerfil) {
+          clientePerfil = await Cliente.create(
+            {
+              usuario_id: usuario.id,
+              numero_telefone: novo_cliente_telefone || usuario.numero_telefone,
+              nome: novo_cliente_nome || usuario.nome,
+            },
+            { transaction: t },
+          );
         }
 
-        // C) Verificar se o NOME já existe (Aviso de duplicidade de nome)
-        const existeNome = await Usuario.findOne({
-          where: { nome: novo_cliente_nome },
-          attributes: ["id", "email"],
-        });
-        if (existeNome) {
-          await t.rollback();
-          return res.status(400).json({
-            erro: `Já existe um cliente com o nome '${novo_cliente_nome}' (E-mail: ${existeNome.email}). Deseja usar o cadastro existente?`,
-          });
-        }
-
-        // Se passou em todas as verificações, cria o usuário
-        const senhaHash = await bcryptjs.hash(telefoneLimpo, 10);
-        // ... dentro de fazer_agendamento ...
-
-        const novoUsuario = await Usuario.create(
-          {
-            nome: novo_cliente_nome,
-            // GERANDO APELIDO AUTOMÁTICO: pega a primeira palavra do nome
-            apelido: novo_cliente_nome.split(" ")[0],
-            email: novo_cliente_email,
-            numero_telefone: telefoneLimpo,
-            palavra_passe: senhaHash,
-            usuario_tipo: "cliente",
-            email_verificado: true,
-          },
-          { transaction: t },
+        final_cliente_id = clientePerfil.id;
+      }
+      // Caso seja o próprio cliente logado agendando para si mesmo
+      else if (
+        !final_cliente_id &&
+        req.user &&
+        req.user.usuario_tipo === "cliente"
+      ) {
+        final_cliente_id = await agendamento_Controller._getClienteId(
+          req.user.id,
         );
-
-        // ... resto do código
-
-        const novoCliente = await Cliente.create(
-          { usuario_id: novoUsuario.id },
-          { transaction: t },
-        );
-        final_cliente_id = novoCliente.id;
       }
 
       if (!final_cliente_id) {
         await t.rollback();
         return res
           .status(400)
-          .json({ erro: "Selecione um cliente ou cadastre um novo." });
+          .json({
+            erro: "Por favor, selecione um cliente ou preencha o cadastro.",
+          });
       }
 
-      // --- 2. VALIDAÇÃO DE CONFLITOS DE HORÁRIO ---
-      const inicio = new Date(
-        data_hora_inicio.endsWith("Z")
-          ? data_hora_inicio
-          : `${data_hora_inicio}:00.000Z`,
-      );
-      const servico = await Servico.findByPk(servico_id, {
-        attributes: ["id", "duracao_minutos"],
-      });
+      // --- 2. TRATAMENTO DE DATAS (Fuso Cabo Verde) ---
+      const inicioCV = dayjs(data_hora_inicio).tz(FUSO_CABO_VERDE);
+      const servico = await Servico.findByPk(servico_id);
 
       if (!servico) {
         await t.rollback();
         return res.status(404).json({ erro: "Serviço não encontrado." });
       }
-      console.log("Data recebida do frontend:", data_hora_inicio);
 
-      if (!data_hora_inicio) {
+      const fimCV = inicioCV.add(servico.duracao_minutos, "minute");
+      const inicioDate = inicioCV.toDate();
+      const fimDate = fimCV.toDate();
+
+      // --- 3. VERIFICAÇÃO DE EXPEDIENTE ---
+      // Se no seu banco Segunda=1, use .day(). Se Segunda=2, use .day() + 1
+      const diaSemana = inicioCV.day();
+      // No agendamento.controller.js
+      const horaInicioStr = inicioCV.format("HH:mm");
+      const horaFimStr = fimCV.format("HH:mm");
+
+      const jornada = await AgendaFuncionario.findOne({
+        where: {
+          funcionario_id,
+          dia_semana: diaSemana,
+          disponivel: true,
+          // Garantimos que a hora do banco (ex: 08:00) seja comparada corretamente
+          hora_inicio: { [Op.lte]: horaInicioStr },
+          hora_fim: { [Op.gte]: horaFimStr },
+        },
+        transaction: t,
+      });
+
+      if (!jornada) {
         await t.rollback();
         return res
           .status(400)
-          .json({ erro: "A data de início é obrigatória." });
+          .json({
+            erro: `O profissional não atende neste horário (${horaInicioStr}h - Dia ${diaSemana}).`,
+          });
       }
-      const fim = new Date(inicio.getTime() + servico.duracao_minutos * 60000);
+
+      // --- 4. VERIFICAÇÃO DE CONFLITO ---
       const statusCancelado = await StatusAgendamento.findOne({
         where: { nome: "cancelado" },
-        attributes: ["id"],
       });
-
       const conflito = await Agendamento.findOne({
         where: {
           funcionario_id,
           status_id: { [Op.ne]: statusCancelado ? statusCancelado.id : 0 },
-          [Op.or]: [
-            { data_hora_inicio: { [Op.between]: [inicio, fim] } },
-            { data_hora_fim: { [Op.between]: [inicio, fim] } },
+          [Op.and]: [
+            { data_hora_inicio: { [Op.lt]: fimDate } },
+            { data_hora_fim: { [Op.gt]: inicioDate } },
           ],
         },
+        transaction: t,
       });
 
       if (conflito) {
         await t.rollback();
-        return res
-          .status(409)
-          .json({ erro: "O profissional já tem outro serviço neste horário." });
+        return res.status(409).json({ erro: "Este horário já está ocupado." });
       }
 
-      // --- 3. FINALIZAR AGENDAMENTO ---
+      // --- 5. CRIAÇÃO DO AGENDAMENTO ---
       const statusConfirmado = await StatusAgendamento.findOne({
         where: { nome: "confirmado" },
-        attributes: ["id"],
       });
+
       const novoAgendamento = await Agendamento.create(
         {
           cliente_id: final_cliente_id,
           servico_id,
           funcionario_id,
           status_id: statusConfirmado.id,
-          data_hora_inicio: inicio,
-          data_hora_fim: fim,
+          data_hora_inicio: inicioDate,
+          data_hora_fim: fimDate,
+          valor_total: servico.preco,
         },
         { transaction: t },
       );
 
       await t.commit();
       return res.status(201).json({
-        mensagem: "Agendamento concluído com sucesso!",
+        mensagem: "Agendamento realizado com sucesso!",
         agendamento: novoAgendamento,
       });
     } catch (error) {
       if (t) await t.rollback();
-      console.error(error);
-      return res
-        .status(500)
-        .json({ erro: "Erro interno no servidor.", detalhe: error.message });
+      console.error("🔥 Erro Crítico:", error);
+      return res.status(500).json({ erro: "Erro interno no servidor." });
     }
   },
   ////////////////////////////////////////////

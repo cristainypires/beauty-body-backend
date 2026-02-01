@@ -1,5 +1,4 @@
 import { Op } from "sequelize";
-import pool from "../database/index.js";
 import {
   Agendamento,
   Funcionario,
@@ -9,6 +8,7 @@ import {
   StatusAgendamento,
   AgendaFuncionario,
   Pagamento,
+  AuditoriaLog
 } from "../models/index.js";
 import { normalizarAgenda } from "../utils/agendamento.utils.js";
 import dayjs from "dayjs";
@@ -175,58 +175,59 @@ const funcionario_Controller = {
     }
   },
   async obter_panorama_completo(req, res) {
-  const { funcionario_id } = req.params;
+  const { funcionario_id } = req.params; // Correto: vem da URL
 
   try {
-    // 1. Informação do Profissional (Buscando o nome na tabela usuario com JOIN)
-    const profResult = await pool.query(`
-      SELECT f.id, u.nome, f.ativo 
-      FROM funcionario f
-      JOIN usuario u ON f.usuario_id = u.id
-      WHERE f.id = $1
-    `, [funcionario_id]);
-
-    // 2. Escala Semanal (Confirmar se o nome é agenda_funcionario no singular)
-    const escalaResult = await pool.query(`
-      SELECT dia_semana, hora_inicio, hora_fim, disponivel 
-      FROM agenda_funcionario 
-      WHERE funcionario_id = $1 
-      ORDER BY dia_semana ASC
-    `, [funcionario_id]);
-
-    // 3. Bloqueios (Confirmar se o nome é agendamento no singular)
-    const bloqueiosResult = await pool.query(`
-      SELECT data_hora_inicio, data_hora_fim, feedback_comentario as motivo 
-      FROM agendamento 
-      WHERE funcionario_id = $1 
-      AND cliente_id IS NULL 
-      AND data_hora_inicio >= NOW() - interval '1 day'
-      ORDER BY data_hora_inicio ASC
-    `, [funcionario_id]);
-
-
-await AuditoriaLog.create({
-      usuario_id: req.usuarioId, // ID do admin que está logado
-      descricao: "Visualizacao de Agenda",
-      detalhes: `O funcionario '${req.body.funcionario_id}' foi ver sua agenda.`
+    // 1. Informação do Profissional
+    const profissional = await Funcionario.findByPk(funcionario_id, {
+      include: [{ model: Usuario, attributes: ['nome'] }]
     });
-    // Retornamos o objeto formatado para o front
+
+    if (!profissional) {
+      return res.status(404).json({ erro: "Profissional não encontrado." });
+    }
+
+    // 2. Escala Semanal
+    const escala = await AgendaFuncionario.findAll({
+      where: { funcionario_id },
+      order: [['dia_semana', 'ASC']]
+    });
+
+    // 3. Bloqueios (Agendamentos sem cliente e sem serviço)
+    const bloqueios = await Agendamento.findAll({
+      where: { 
+        funcionario_id,
+        cliente_id: null,
+        data_hora_inicio: { [Op.gte]: dayjs().subtract(1, 'day').toDate() }
+      },
+      order: [['data_hora_inicio', 'ASC']]
+    });
+
+    // 4. Log de Auditoria (Corrigido req.user.id e a origem do ID do funcionário)
+    await AuditoriaLog.create({
+      usuario_id: req.user?.id || 1, // ID do administrador/rececionista logado
+      descricao: "Visualização de Panorama",
+      detalhes: `Consultou a agenda completa do funcionário: ${profissional.Usuario?.nome}`
+    });
+
+    // Retornamos o objeto exatamente como o seu Frontend espera
     return res.json({
-      profissional: profResult.rows[0] || { nome: "Não encontrado", ativo: false },
-      escala: escalaResult.rows,
-      bloqueios: bloqueiosResult.rows
+      profissional: {
+        nome: profissional.Usuario?.nome || "Sem Nome",
+        ativo: profissional.ativo
+      },
+      escala: escala,
+      bloqueios: bloqueios
     });
 
   } catch (e) {
-    // IMPORTANTE: Vê o erro exato no terminal do VS Code agora
-    console.error("ERRO NO PANORAMA:", e.message);
+    console.error("ERRO NO PANORAMA:", e);
     return res.status(500).json({ 
       erro: "Erro ao carregar panorama.",
       detalhes: e.message 
     });
   }
 },
-
   // 2. Marcar Disponibilidade Semanal (POST)
   // No topo do teu arquivo, certifica-te que o pool está importado
 // 
@@ -235,66 +236,66 @@ await AuditoriaLog.create({
 async marcar_disponibilidade(req, res) {
   const { funcionario_id, semana } = req.body;
 
-  if (!funcionario_id || !semana) {
-    return res.status(400).json({ erro: "Dados incompletos." });
+  if (!funcionario_id || !semana || !Array.isArray(semana)) {
+    return res.status(400).json({ erro: "Dados da agenda inválidos ou incompletos." });
   }
 
+  // Mapeamento exato para o que o seu frontend envia
   const mapaDias = {
-    "Segunda-feira": 1, "Terça-feira": 2, "Quarta-feira": 3,
-    "Quinta-feira": 4, "Sexta-feira": 5, "Sábado": 6, "Domingo": 0
+    "Domingo": 0, "Segunda-feira": 1, "Terça-feira": 2, "Quarta-feira": 3,
+    "Quinta-feira": 4, "Sexta-feira": 5, "Sábado": 6
   };
 
-  // Pegamos uma conexão do Pool
-  const client = await pool.connect();
+  const t = await AgendaFuncionario.sequelize.transaction();
 
   try {
-    // INICIAR TRANSAÇÃO MANUAL NO POSTGRES
-    await client.query("BEGIN");
-
-    // 1. Limpar a agenda anterior para evitar duplicados
-    await client.query(
-      "DELETE FROM agenda_funcionario WHERE funcionario_id = $1",
-      [funcionario_id]
-    );
-
-    // 2. Inserir os novos horários
-    for (const item of semana) {
-      const diaEnum = mapaDias[item.dia];
-      
-      await client.query(
-        `INSERT INTO agenda_funcionario 
-          (funcionario_id, dia_semana, hora_inicio, hora_fim, disponivel) 
-         VALUES ($1, $2, $3, $4, $5)`,
-        [
-          funcionario_id,
-          diaEnum,
-          item.entrada,
-          item.saida,
-          item.ativo
-        ]
-      );
-    }
-
-    // FINALIZAR TRANSAÇÃO (SALVAR)
-    await client.query("COMMIT");
-    await AuditoriaLog.create({
-      usuario_id: req.usuarioId, // ID do admin que está logado
-      descricao: "Marcação de Disponibilidade",
-      detalhes: `O funcionario '${req.body.funcionario_id}' sua disponibilidade foi marcada.`
+    // 1. Limpar a agenda anterior
+    await AgendaFuncionario.destroy({
+      where: { funcionario_id },
+      transaction: t
     });
 
-    return res.json({ mensagem: "Agenda do profissional atualizada! ✅" });
+    // 2. Mapear e validar as novas entradas
+    const novasEntradas = semana.map(item => {
+      const diaNum = mapaDias[item.dia];
+      
+      // Validação de segurança: se o dia não for encontrado no mapa, lança erro
+      if (diaNum === undefined) throw new Error(`Dia da semana inválido: ${item.dia}`);
 
-    
+      return {
+        funcionario_id,
+        dia_semana: diaNum,
+        hora_inicio: item.entrada || "08:00",
+        hora_fim: item.saida || "19:00",
+        disponivel: !!item.ativo // Garante que é booleano
+      };
+    });
+
+    // 3. Inserir no banco
+    await AgendaFuncionario.bulkCreate(novasEntradas, { transaction: t });
+
+    // 4. Gravar Auditoria (Agora com o modelo importado corretamente)
+    // Usamos req.user.id (do middleware auth) ou req.body.admin_id como fallback
+    const logAtor = req.user?.id || funcionario_id; 
+
+    await AuditoriaLog.create({
+      usuario_id: logAtor,
+      descricao: "Agenda Atualizada",
+      detalhes: `A disponibilidade do funcionário ID ${funcionario_id} foi reconfigurada.`
+    }, { transaction: t });
+
+    await t.commit();
+    return res.json({ mensagem: "Agenda atualizada com sucesso! ✨" });
 
   } catch (erro) {
-    // SE DER ERRO, DESFAZ TUDO
-    await client.query("ROLLBACK");
-    console.error("Erro no SQL:", erro);
-    return res.status(500).json({ erro: "Erro ao salvar disponibilidade no banco." });
-  } finally {
-    // LIBERAR CONEXÃO
-    client.release();
+    if (t) await t.rollback();
+    console.error("ERRO DETALHADO NO BANCO:", erro);
+    
+    // Retornamos o erro real para ajudar no debug se necessário
+    return res.status(500).json({ 
+      erro: "Erro ao salvar disponibilidade no banco.",
+      detalhe: erro.message 
+    });
   }
 },
 
@@ -304,67 +305,70 @@ async bloquear_horario(req, res) {
   const { data, hora, motivo, funcionario_id } = req.body;
 
   try {
-    // 1. Montamos o início e o fim. 
-    // Por padrão, bloqueamos 1 hora para imprevistos (podes ajustar conforme necessário)
-    const data_hora_inicio = `${data} ${hora}`;
+    // Trim remove espaços em branco acidentais
+    const data_formatada = data.trim();
+    const hora_formatada = hora.trim();
+    const data_hora_inicio = `${data_formatada} ${hora_formatada}`;
+    
+    // Calcula o fim (bloqueio de 1 hora)
+    const data_hora_fim = dayjs(data_hora_inicio).add(1, 'hour').format("YYYY-MM-DD HH:mm:ss");
 
-    // 2. Inserimos na tabela 'agendamento'
-    // Deixamos cliente_id e servico_id como NULL para indicar que é um bloqueio
-    await pool.query(
-      `INSERT INTO agendamento 
-        (funcionario_id, cliente_id, servico_id, status_id, data_hora_inicio, data_hora_fim, feedback_comentario, criado_em, atualizado_em) 
-       VALUES ($1, NULL, NULL, $2, $3, $3::timestamp + interval '1 hour', $4, NOW(), NOW())`,
-      [
-        funcionario_id, 
-        2, // Use o ID de status que representa "Confirmado" no seu banco (geralmente 2)
-        data_hora_inicio,
-        motivo || "Imprevisto / Bloqueio Manual"
-      ]
-    );
-await AuditoriaLog.create({
-      usuario_id: req.usuarioId, // ID do admin que está logado
-      descricao: "Horario Bloqueado",
-      detalhes: `O funcionario '${req.body.funcionario_id}' foi bloquear um Horario.`
+    await Agendamento.create({
+      funcionario_id: parseInt(funcionario_id),
+      cliente_id: null,
+      servico_id: null,
+      status_id: 2, 
+      data_hora_inicio: data_hora_inicio,
+      data_hora_fim: data_hora_fim,
+      feedback_comentario: motivo || "Bloqueio Manual"
     });
-    return res.json({ mensagem: "Horário bloqueado com sucesso! Este período não aparecerá mais como disponível para os clientes. 🔒" });
+
+    await AuditoriaLog.create({
+      usuario_id: req.user?.id || 1,
+      descricao: "Horário Bloqueado",
+      detalhes: `Bloqueio manual para o funcionário ${funcionario_id} às ${data_hora_inicio}`
+    });
+
+    return res.json({ mensagem: "Horário bloqueado com sucesso! 🔒" });
 
   } catch (e) {
-    console.error("ERRO AO BLOQUEAR:", e.message);
-    return res.status(500).json({ 
-      erro: "Erro ao bloquear.", 
-      detalhes: e.message 
-    });
+    if (e.name === 'SequelizeUniqueConstraintError') {
+      return res.status(400).json({ 
+        erro: "Este horário já está ocupado por outro agendamento ou bloqueio." 
+      });
+    }
+    console.error("ERRO AO BLOQUEAR:", e);
+    return res.status(500).json({ erro: "Erro interno ao processar o bloqueio." });
   }
 },
-
 // Marcar Férias (Desativa o funcionário temporariamente)
 async marcar_ferias(req, res) {
   const { funcionario_id, data_inicio, data_fim } = req.body;
 
   try {
-    // 1. Alteramos para "funcionario" (singular)
-    // 2. Opcional: Podes guardar as datas num campo de observações se quiseres
-    await pool.query(
-      "UPDATE funcionario SET ativo = false WHERE id = $1",
-      [funcionario_id]
-    );
-await AuditoriaLog.create({
-      usuario_id: req.usuarioId, // ID do admin que está logado
-      descricao: "Marcação de ferias",
-      detalhes: `O funcionario '${req.body.funcionario_id}' foi marcar sua feria para ${data_inicio} a ${data_fim}.`
-    });
-    return res.json({ 
-      mensagem: `Férias registadas com sucesso de ${data_inicio} a ${data_fim}! O profissional está agora inativo.` 
-    });
+    let dataAtual = dayjs(data_inicio);
+    const fim = dayjs(data_fim);
 
+    while (dataAtual.isBefore(fim) || dataAtual.isSame(fim, 'day')) {
+      const dataStr = dataAtual.format("YYYY-MM-DD");
+
+      await Agendamento.create({
+        funcionario_id: parseInt(funcionario_id),
+        cliente_id: null,
+        servico_id: null,
+        status_id: 2, 
+        // BLOQUEIO TOTAL: das 00:00 às 23:59 para não sobrar nenhum minuto livre
+        data_hora_inicio: `${dataStr} 00:00:00`,
+        data_hora_fim: `${dataStr} 23:59:59`,
+        feedback_comentario: "Férias / Ausência"
+      }).catch(err => console.log(`Dia ${dataStr} já estava bloqueado.`));
+
+      dataAtual = dataAtual.add(1, 'day');
+    }
+
+    return res.json({ mensagem: "Férias registradas! Todos os horários do período foram bloqueados. ✈️" });
   } catch (e) {
-    // Imprime o erro real no terminal para sabermos se é o nome da tabela ou da coluna
-    console.error("ERRO NAS FÉRIAS:", e.message);
-    
-    return res.status(500).json({ 
-      erro: "Erro ao registar férias.",
-      detalhes: e.message 
-    });
+    return res.status(500).json({ erro: "Erro ao registrar férias." });
   }
 },
 
@@ -431,22 +435,34 @@ await AuditoriaLog.create({
   },
 
   // Lista apenas funcionários que são 'profissionais' (quem atende)
-  async listarProfissionais(req, res) {
-  try {
-    // Fazemos um JOIN entre a tabela funcionario (f) e usuario (u)
-    // Removemos o 'ativo: true' para que possas gerir mesmo quem está de férias
-    const result = await pool.query(`
-      SELECT f.id, u.nome 
-      FROM funcionario f
-      JOIN usuario u ON f.usuario_id = u.id
-      WHERE f.tipo = 'profissional'
-      ORDER BY u.nome ASC
-    `);
+  // No topo do seu arquivo, certifique-se de que tem estas importações:
+// import { Funcionario, Usuario } from "../models/index.js";
 
-    return res.json(result.rows);
-  } catch (e) {
-    console.error("Erro ao listar profissionais:", e.message);
-    return res.status(500).json({ erro: "Erro ao buscar profissionais no banco." });
+async listarProfissionais(req, res) {
+  try {
+    // Usamos o Sequelize para buscar os dados com o JOIN automático
+    const profissionais = await Funcionario.findAll({
+      include: [
+        {
+          model: Usuario,
+          attributes: ["nome"], // Pegamos apenas o nome da tabela Usuario
+        },
+      ],
+    });
+
+    // Formatamos os dados para o formato que o seu Frontend espera {id, nome}
+    const formatados = profissionais.map((p) => ({
+      id: p.id,
+      nome: p.Usuario ? p.Usuario.nome : "Sem Nome",
+    }));
+
+    console.log("=== PROFISSIONAIS ENCONTRADOS (SEQUELIZE) ===");
+    console.log(formatados);
+
+    return res.json(formatados);
+  } catch (erro) {
+    console.error("ERRO AO LISTAR PROFISSIONAIS:", erro);
+    return res.status(500).json({ erro: "Erro interno no servidor" });
   }
 },
 

@@ -1,97 +1,144 @@
 import bcrypt from "bcryptjs";
 import pool from "../database/index.js"; // Aqui 'pool' é uma instância do Sequelize
 import { gerarToken } from "../utils/Jwt.js";
+import { Usuario, Cliente, sequelize } from "../models/index.js"; // Importe seus modelos
+
 
 export async function login(req, res) {
-  const { email, password, palavra_passe } = req.body;
-  const senha = password || palavra_passe;
+  const { email, password } = req.body;
 
   try {
-    // 1. Buscar usuário na tabela 'usuario'
-    // No Sequelize, usamos { bind: [valor] } para preencher o $1
-    const usuarios = await pool.query(
-      "SELECT id, nome, email, palavra_passe, usuario_tipo FROM usuario WHERE email = $1",
+    // 1. Busca usuário e já descobre se é Admin ou Funcionário (LEFT JOIN)
+    const usuarios = await sequelize.query(
+      `SELECT u.id, u.nome, u.email, u.palavra_passe, u.usuario_tipo, 
+              f.id AS funcionario_id, a.id AS admin_id
+       FROM usuario u
+       LEFT JOIN funcionario f ON f.usuario_id = u.id
+       LEFT JOIN admin a ON a.usuario_id = u.id
+       WHERE LOWER(u.email) = LOWER(:email)`,
       {
-        bind: [email],
-        type: pool.QueryTypes.SELECT, // Indica que é uma consulta de seleção
+        replacements: { email: email.trim() },
+        type: sequelize.QueryTypes.SELECT,
+        raw: true
       }
     );
 
-    // O Sequelize retorna um array de objetos diretamente em SELECT
     if (!usuarios || usuarios.length === 0) {
-      return res.status(401).json({ message: "Credenciais inválidas" });
+      return res.status(401).json({ message: "Email ou senha incorretos." });
     }
 
     const usuario = usuarios[0];
 
-    // 2. Validar a senha criptografada
-    const senhaOk = bcrypt.compareSync(senha, usuario.palavra_passe);
-
+    // 2. Compara a senha
+    const senhaOk = await bcrypt.compare(password, usuario.palavra_passe);
     if (!senhaOk) {
-      return res.status(401).json({ message: "Credenciais inválidas" });
+      return res.status(401).json({ message: "Email ou senha incorretos." });
     }
 
-    // 3. Resolver a Role (Papel)
-    let role = usuario.usuario_tipo;
+    // 3. Define qual ID de perfil usar
+    const perfilId = usuario.usuario_tipo === 'admin' ? usuario.admin_id : usuario.funcionario_id;
 
-    if (role === "funcionario") {
-      const funcionarios = await pool.query(
-        "SELECT tipo FROM funcionario WHERE usuario_id = $1",
-        {
-          bind: [usuario.id],
-          type: pool.QueryTypes.SELECT,
-        }
-      );
-
-      if (funcionarios.length > 0 && funcionarios[0].tipo === "profissional") {
-        role = "profissional";
-      }
-    }
-
-    // 4. Buscar o ID do perfil específico
-    let perfil_id = null;
-    
-    if (role === "admin") {
-      const admins = await pool.query(
-        "SELECT id FROM admin WHERE usuario_id = $1",
-        { bind: [usuario.id], type: pool.QueryTypes.SELECT }
-      );
-      perfil_id = admins[0]?.id;
-    } 
-    else if (role === "funcionario" || role === "profissional") {
-      const funcs = await pool.query(
-        "SELECT id FROM funcionario WHERE usuario_id = $1",
-        { bind: [usuario.id], type: pool.QueryTypes.SELECT }
-      );
-      perfil_id = funcs[0]?.id;
-    } 
-    else if (role === "cliente") {
-      const clientes = await pool.query(
-        "SELECT id FROM cliente WHERE usuario_id = $1",
-        { bind: [usuario.id], type: pool.QueryTypes.SELECT }
-      );
-      perfil_id = clientes[0]?.id;
-    }
-
-    // 5. Gerar Token JWT
-    const token = gerarToken({
-      id: usuario.id,
-      perfil_id: perfil_id,
-      role: role,
+    const token = gerarToken({ 
+      id: usuario.id, 
+      perfil_id: perfilId, 
+      role: usuario.usuario_tipo 
     });
 
-    // 6. Resposta
-    return res.json({
+     return res.status(200).json({
       token,
-      role,
-      usuario: {
-        id: usuario.id,
-        nome: usuario.nome,
-        email: usuario.email,
-      },
+      role: usuario.usuario_tipo,
+      usuario: { id: usuario.id, nome: usuario.nome }
     });
+
   } catch (err) {
-    console.error("Erro no Login:", err);
-    return res.status(500).json({ message: "Erro interno no servidor" });
+    return res.status(500).json({ message: "Erro no servidor." });
   }
 }
+// ... seus imports (bcryptjs, pool, etc)
+
+export async function registrar(req, res) {
+  const { nome, email, telefone, senha } = req.body;
+
+  // Iniciamos uma transação para garantir que ou criamos os dois (User e Cliente) ou não criamos nenhum
+  const t = await sequelize.transaction();
+
+  try {
+    // 1. Verificar se o e-mail já existe (Usando o Modelo para ser mais limpo)
+    const usuarioExistente = await Usuario.findOne({ where: { email } });
+
+    if (usuarioExistente) {
+      await t.rollback();
+      return res.status(400).json({ message: "Este e-mail já está cadastrado." });
+    }
+const telefoneExistente = await Usuario.findOne({
+  where: { numero_telefone: telefone }
+});
+
+if (telefoneExistente) {
+  await t.rollback();
+  return res.status(400).json({ message: "Este número de telefone já está cadastrado." });
+}
+
+    // 2. Criptografar a senha
+    const hashSenha = await bcrypt.hash(senha, 10);
+
+    // 3. Criar o Usuário
+    const apelido = nome.split(' ')[0];
+    
+    const novoUsuario = await Usuario.create({
+      nome,
+      apelido,
+      email,
+      numero_telefone: telefone,
+      palavra_passe: hashSenha,
+      usuario_tipo: 'cliente',
+      email_verificado: false,
+      telefone_verificado: false
+    }, { transaction: t });
+
+    // 4. Criar o perfil de Cliente vinculado (O ID já vem automático no objeto novoUsuario)
+    await Cliente.create({
+      usuario_id: novoUsuario.id,
+      criado_em: new Date()
+    }, { transaction: t });
+
+    // Se chegou aqui sem erros, confirmamos as duas inserções no banco
+    await t.commit();
+
+    return res.status(201).json({ message: "Conta criada com sucesso!" });
+
+  }  catch (err) {
+
+  if (t) await t.rollback();
+
+  console.error("Erro no Registro:", err);
+
+  // 👉 Email duplicado ou telefone duplicado
+  if (err.name === "SequelizeUniqueConstraintError") {
+
+    const campo = err.errors[0].path;
+
+    if (campo === "email") {
+      return res.status(400).json({ message: "Este e-mail já está cadastrado." });
+    }
+
+    if (campo === "numero_telefone") {
+      return res.status(400).json({ message: "Este número de telefone já está cadastrado." });
+    }
+
+    return res.status(400).json({ message: "Dados já existentes no sistema." });
+  }
+
+  // 👉 Erros de validação (campo vazio, formato errado etc)
+  if (err.name === "SequelizeValidationError") {
+    return res.status(400).json({
+      message: err.errors[0].message
+    });
+  }
+
+  // 👉 Erro genérico
+  return res.status(500).json({ 
+    message: "Erro interno ao processar cadastro." 
+  });
+
+}}

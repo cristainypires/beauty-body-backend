@@ -1,17 +1,12 @@
 import { Router } from "express";
-import { login } from "../controllers/AuthController.js";
-import { loginSchema } from "../validators/LoginValidator.js";
+import { login, registrar } from "../controllers/AuthController.js";
 
 const router = Router();
 
-router.post("/login", (req, res) => {
-  const result = loginSchema.safeParse(req.body);
+// ✅ AGORA SIM: A rota chama diretamente a função que faz o SQL e dá o Token
+router.post("/login", login);
 
-  if (!result.success) {
-    return res.status(400).json(result.error);
-  }
-
-  login(req, res);
-});
+// ✅ Rota de registro
+router.post("/registrar", registrar);
 
 export default router;

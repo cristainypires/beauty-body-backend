@@ -93,14 +93,16 @@ Servico.belongsToMany(Promocao, {
   otherKey: 'promocao_id',
   as: 'promocoes' 
 });
-
+Funcionario.belongsTo(Usuario, { foreignKey: 'usuario_id' });
+Usuario.hasOne(Funcionario, { foreignKey: 'usuario_id' });
 
 // Procure por AuditoriaLog e adicione a ligação se não houver
 AuditoriaLog.belongsTo(Usuario, { foreignKey: "usuario_id", as: "usuario" });
 Usuario.hasMany(AuditoriaLog, { foreignKey: "usuario_id" });
 
 
-
+Funcionario.belongsToMany(Servico, { through: ServicoFuncionario, foreignKey: "funcionario_id" });
+Servico.belongsToMany(Funcionario, { through: ServicoFuncionario, foreignKey: "servico_id" });
 
 export {
   Usuario,
