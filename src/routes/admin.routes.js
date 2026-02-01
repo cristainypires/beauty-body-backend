@@ -1,7 +1,7 @@
 import express from "express";
                
 import admin_Controller from "../controllers/admin.controller.js";
-import auth from "../middlewares/auth.js";
+import auth from "../middlewares/AuthMiddleware.js";
 
 const router = express.Router();
 
@@ -15,10 +15,10 @@ router.put("/servicos/:servico_id", admin_Controller.atualizar_servico);
 router.delete("/servicos/:servico_id", admin_Controller.remover_servico); 
 
 //funcionario
-router.get("/funcionarios", admin_Controller.listar_funcionarios);           
-router.post("/funcionarios", admin_Controller.criar_funcionario);            
-router.put("/funcionarios/:funcionario_id", admin_Controller.atualizar_funcionario); 
-router.delete("/funcionarios/:funcionario_id", admin_Controller.remover_funcionario); 
+router.get("/listarfuncionarios", admin_Controller.listar_funcionarios);           
+router.post("/criarfuncionarios", admin_Controller.criar_funcionario);            
+router.put("/listarfuncionarios/:funcionario_id", admin_Controller.atualizar_funcionario); 
+router.delete("/listarfuncionarios/:funcionario_id", admin_Controller.remover_funcionario); 
 
 //clientes
 router.get("/clientes", admin_Controller.listar_clientes);       

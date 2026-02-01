@@ -30,13 +30,14 @@ export function login(req, res) {
   const usuario = usuarios.find(u => u.email === email);
 
   if (!usuario) {
-    return res.status(401).json({ message: "Credenciais inválidas" });
+    return res.status(401).json({ message: "Email inválido" });
+    
   }
 
   const senhaValida = bcrypt.compareSync(password, usuario.password);
 
   if (!senhaValida) {
-    return res.status(401).json({ message: "Credenciais inválidas" });
+    return res.status(401).json({ message: "Senha inválida" });
   }
 
   const token = gerarToken(usuario);

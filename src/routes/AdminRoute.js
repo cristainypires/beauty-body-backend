@@ -19,4 +19,18 @@ router.get(
   }
 );
 
+router.get(
+  "/funcionario/dashboard",
+  autenticar,
+  autorizar("admin", "funcionario"),
+  (req, res) => {
+    return res.json({
+      success: true,
+      code: "FUNCIONARIO_DASHBOARD_OK",
+      message: "Área funcionário acessada com sucesso",
+      user: req.usuario
+    });
+  }
+);
+
 export default router;
