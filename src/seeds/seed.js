@@ -28,10 +28,10 @@ const seed = async () => {
     const equipe = [
       ['Admin Sistema', 'Admin', '900000001', 'admin@beauty.com', 'admin', 'Geral'],
       ['Joana Rececao', 'Joana', '900000002', 'recepcao@beauty.com', 'funcionario', 'recepcao'],
-      ['Cristainny Pires', 'Cristainny', '900000003', 'cristainny@beauty.com', 'funcionario', 'profissional'],
-      ['Sofia Santos', 'Sofia', '900000004', 'sofia@beauty.com', 'funcionario', 'profissional'],
-      ['Carlos Barber', 'Carlos', '900000005', 'carlos@beauty.com', 'funcionario', 'profissional'],
-      ['Ana Nails', 'Ana', '900000006', 'ana@beauty.com', 'funcionario', 'profissional']
+      ['Cristainny Pires', 'Cristainny', '900000003', 'cristainny@beauty.com', 'profissional', 'profissional'],
+      ['Sofia Santos', 'Sofia', '900000004', 'sofia@beauty.com', 'profissional', 'profissional'],
+      ['Carlos Barber', 'Carlos', '900000005', 'carlos@beauty.com', 'profissional', 'profissional'],
+      ['Ana Nails', 'Ana', '900000006', 'ana@beauty.com', 'profissional', 'profissional']
     ];
 
     const profIds = [];
