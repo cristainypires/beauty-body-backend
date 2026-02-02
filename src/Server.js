@@ -21,9 +21,10 @@ dotenv.config();
 const app = express();
 
 // --- MIDDLEWARES GLOBAIS ---
-app.use(cors());
-app.use(express.json());
 
+app.use(cors()); // Libera o acesso do dashboard
+app.use(express.json()); // ESSA LINHA É A MAIS IMPORTANTE
+app.use(express.urlencoded({ extended: true }));
 // --- ROTA DE BOAS-VINDAS ---
 app.get("/", (req, res) => {
   res.json({ message: "Back End de Maddie Beauty Boutique está ON 🚀" });

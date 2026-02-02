@@ -58,8 +58,12 @@ export async function login(req, res) {
   }
 }
 
-// --- REGISTRO ---
+
+
 export async function registro(req, res) {
+  // Adicionei logs para você ver no PM2 o que está chegando
+  console.log("Dados recebidos no registro:", req.body);
+
   const { nome, email, password, palavra_passe, usuario_tipo, telefone } = req.body;
   const senha = password || palavra_passe;
 
@@ -79,31 +83,47 @@ export async function registro(req, res) {
     const salt = bcrypt.genSaltSync(10);
     const senhaHash = bcrypt.hashSync(senha, salt);
 
-    // Cria o usuário
+    // Cria o usuário com os campos que o seu PostgreSQL exige
     const novoUsuario = await Usuario.create({
       nome,
+      apelido: nome.split(' ')[0], // Pega o primeiro nome como apelido
+      numero_telefone: telefone || '0000000', // Garante que não vá nulo
       email,
       palavra_passe: senhaHash,
-      usuario_tipo: usuario_tipo || "cliente"
+      usuario_tipo: usuario_tipo || "cliente",
+      email_verificado: true,
+      telefone_verificado: true
     }, { transaction: t });
 
     const tipo = usuario_tipo || "cliente";
 
     // Cria o perfil específico
     if (tipo === "cliente") {
-      await Cliente.create({ usuario_id: novoUsuario.id, telefone }, { transaction: t });
+      await Cliente.create({ 
+        usuario_id: novoUsuario.id,
+        criado_em: new Date() // Conforme vimos que seu banco pede
+      }, { transaction: t });
     } else if (tipo === "funcionario") {
-      await Funcionario.create({ usuario_id: novoUsuario.id, tipo: "atendente" }, { transaction: t });
+      await Funcionario.create({ 
+        usuario_id: novoUsuario.id, 
+        tipo: "atendente",
+        criado_em: new Date() 
+      }, { transaction: t });
     } else if (tipo === "admin") {
-      await Admin.create({ usuario_id: novoUsuario.id }, { transaction: t });
+      await Admin.create({ 
+        usuario_id: novoUsuario.id,
+        created_at: new Date(),
+        updated_at: new Date()
+      }, { transaction: t });
     }
 
     await t.commit();
+    console.log("✅ Usuário registrado com sucesso:", email);
     return res.status(201).json({ message: "Usuário registrado com sucesso!" });
 
   } catch (err) {
-    await t.rollback();
-    console.error("Erro no Registro:", err);
-    return res.status(500).json({ message: "Erro ao processar registro." });
+    if (t) await t.rollback();
+    console.error("❌ Erro detalhado no Registro:", err);
+    return res.status(500).json({ message: "Erro ao processar registro: " + err.message });
   }
 }
