@@ -59,35 +59,39 @@ export async function login(req, res) {
 }
 
 
-
 export async function registro(req, res) {
-  // Adicionei logs para você ver no PM2 o que está chegando
-  console.log("Dados recebidos no registro:", req.body);
+  // 1. Log para sabermos o que o Dashboard enviou
+  console.log("==> Dados recebidos no Registro:", req.body);
 
-  const { nome, email, password, palavra_passe, usuario_tipo, telefone } = req.body;
+  const { nome, email, password, palavra_passe, telefone, usuario_tipo } = req.body;
   const senha = password || palavra_passe;
 
-  if (!nome || !email || !senha) {
-    return res.status(400).json({ message: "Nome, E-mail e Senha são obrigatórios." });
+  // 2. Validação básica
+  if (!nome || !email || !senha || !telefone) {
+    return res.status(400).json({ 
+      message: "Campos obrigatórios: Nome, E-mail, Senha e Telefone." 
+    });
   }
 
+  // Iniciar uma transação (ou tudo salva ou nada salva)
   const t = await sequelize.transaction();
 
   try {
+    // 3. Verificar se e-mail já existe
     const existe = await Usuario.findOne({ where: { email }, transaction: t });
     if (existe) {
       await t.rollback();
       return res.status(400).json({ message: "Este e-mail já está cadastrado." });
     }
 
-    const salt = bcrypt.genSaltSync(10);
-    const senhaHash = bcrypt.hashSync(senha, salt);
+    // 4. Criptografar Senha
+    const senhaHash = bcrypt.hashSync(senha, 10);
 
-    // Cria o usuário com os campos que o seu PostgreSQL exige
+    // 5. Criar o USUARIO (Campos obrigatórios do seu banco)
     const novoUsuario = await Usuario.create({
       nome,
-      apelido: nome.split(' ')[0], // Pega o primeiro nome como apelido
-      numero_telefone: telefone || '0000000', // Garante que não vá nulo
+      apelido: nome.split(' ')[0], // Gera o apelido automaticamente do nome
+      numero_telefone: telefone,
       email,
       palavra_passe: senhaHash,
       usuario_tipo: usuario_tipo || "cliente",
@@ -95,35 +99,42 @@ export async function registro(req, res) {
       telefone_verificado: true
     }, { transaction: t });
 
+    // 6. Criar o PERFIL baseado no tipo
     const tipo = usuario_tipo || "cliente";
 
-    // Cria o perfil específico
     if (tipo === "cliente") {
       await Cliente.create({ 
         usuario_id: novoUsuario.id,
-        criado_em: new Date() // Conforme vimos que seu banco pede
+        criado_em: new Date() // Seu banco usa Português aqui
       }, { transaction: t });
-    } else if (tipo === "funcionario") {
+    } 
+    else if (tipo === "funcionario") {
       await Funcionario.create({ 
         usuario_id: novoUsuario.id, 
-        tipo: "atendente",
-        criado_em: new Date() 
+        tipo: "atendente", 
+        funcao_especialidade: "Geral",
+        ativo: true,
+        criado_em: new Date() // Seu banco usa Português aqui
       }, { transaction: t });
-    } else if (tipo === "admin") {
+    }
+    else if (tipo === "admin") {
       await Admin.create({ 
         usuario_id: novoUsuario.id,
-        created_at: new Date(),
+        created_at: new Date(), // Admin usa Inglês
         updated_at: new Date()
       }, { transaction: t });
     }
 
     await t.commit();
-    console.log("✅ Usuário registrado com sucesso:", email);
-    return res.status(201).json({ message: "Usuário registrado com sucesso!" });
+    console.log("✅ Usuário registrado com sucesso!");
+    return res.status(201).json({ message: "Registro concluído com sucesso!" });
 
   } catch (err) {
     if (t) await t.rollback();
     console.error("❌ Erro detalhado no Registro:", err);
-    return res.status(500).json({ message: "Erro ao processar registro: " + err.message });
+    return res.status(500).json({ 
+      message: "Erro no servidor ao registrar.",
+      error: err.message 
+    });
   }
 }
